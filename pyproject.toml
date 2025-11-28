@@ -1,0 +1,22 @@
+[project]
+name = "compio"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Fantix King", email = "fantix.king@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.maturin]
+module-name = "compio._core"
+python-packages = ["compio"]
+python-source = "src"
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
