@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Cargo-generated files
+/target/
+
+# IDE files
+/.vscode/
+/.idea/
