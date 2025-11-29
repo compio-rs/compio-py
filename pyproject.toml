@@ -6,8 +6,11 @@ readme = "README.md"
 authors = [
     { name = "Fantix King", email = "fantix.king@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = []
+
+[project.optional-dependencies]
+test = []
 
 [tool.maturin]
 module-name = "compio._core"

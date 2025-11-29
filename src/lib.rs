@@ -5,10 +5,27 @@ use pyo3::prelude::*;
 /// import the module.
 #[pymodule]
 mod _core {
+    use compio::driver::Proactor;
     use pyo3::prelude::*;
+    use pyo3::types::PyWeakrefReference;
+
+    #[pyclass(unsendable)]
+    pub struct Runtime {
+        pyloop: Py<PyWeakrefReference>,
+        driver: Proactor,
+    }
+
+    #[pymethods]
+    impl Runtime {
+        fn driver_type(&self) -> PyResult<String> {
+            Ok(format!("{:?}", self.driver.driver_type()))
+        }
+    }
 
     #[pyfunction]
-    fn hello_from_bin() -> String {
-        "Hello from compio!".to_string()
+    fn make_runtime(pyloop: &Bound<PyAny>) -> PyResult<Runtime> {
+        let pyloop = PyWeakrefReference::new(pyloop)?.unbind();
+        let driver = Proactor::new()?;
+        Ok(Runtime { pyloop, driver })
     }
 }
