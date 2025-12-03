@@ -1,4 +1,4 @@
-# compio-py
+# <img src="docs/logo.svg" height="40px" align="right">  compio-py
 
 High-performance Python `asyncio` alternative event loop powered by Rust's `compio` library.
 
