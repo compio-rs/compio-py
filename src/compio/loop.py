@@ -1,7 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
+# Copyright 2025 Fantix King
+
 import asyncio
 import enum
 
 from compio import _core
+
 
 class DriverType(enum.StrEnum):
     IO_URING = "IoUring"
@@ -9,16 +13,18 @@ class DriverType(enum.StrEnum):
     IOCP = "IOCP"
 
 
-class CompioLoop(asyncio.AbstractEventLoop):
-    __slots__ = ("__runtime", "_driver_type")
-
-    def __init__(self):
-        self.__runtime = _core.make_runtime(self)
-        self._driver_type = DriverType(self.__runtime.driver_type())
+class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
+    def get_driver_type(self) -> DriverType:
+        return DriverType(super().get_driver_type())
 
     def __repr__(self):
-        return f"<CompioLoop driver={self._driver_type}>"
-
-    @property
-    def driver_type(self) -> DriverType:
-        return self._driver_type
+        try:
+            driver_type = f"driver={self.get_driver_type().value} "
+        except RuntimeError:
+            driver_type = ""
+        return (
+            f"<{self.__class__.__name__} "
+            f"{driver_type}"
+            f"running={self.is_running()} "
+            f"closed={self.is_closed()}>"
+        )

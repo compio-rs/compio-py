@@ -1,31 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
+// Copyright 2025 Fantix King
+
 use pyo3::prelude::*;
+
+mod event_loop;
+mod handle;
+mod import;
+mod owned;
+mod runtime;
+mod thread;
 
 /// A Python module implemented in Rust. The name of this module must match
 /// the `lib.name` setting in the `Cargo.toml`, else Python will not be able to
 /// import the module.
 #[pymodule]
-mod _core {
-    use compio::driver::Proactor;
-    use pyo3::prelude::*;
-    use pyo3::types::PyWeakrefReference;
-
-    #[pyclass(unsendable)]
-    pub struct Runtime {
-        pyloop: Py<PyWeakrefReference>,
-        driver: Proactor,
-    }
-
-    #[pymethods]
-    impl Runtime {
-        fn driver_type(&self) -> PyResult<String> {
-            Ok(format!("{:?}", self.driver.driver_type()))
-        }
-    }
-
-    #[pyfunction]
-    fn make_runtime(pyloop: &Bound<PyAny>) -> PyResult<Runtime> {
-        let pyloop = PyWeakrefReference::new(pyloop)?.unbind();
-        let driver = Proactor::new()?;
-        Ok(Runtime { pyloop, driver })
-    }
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    event_loop::register(m)?;
+    handle::register(m)?;
+    Ok(())
 }

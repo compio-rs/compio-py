@@ -8,9 +8,11 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = []
+license = "Apache-2.0 OR MulanPSL-2.0"
+license-files = ["LICENSE.Apache-2.0", "LICENSE.MulanPSL-2.0"]
 
 [project.optional-dependencies]
-test = []
+test = ["mypy>=1.0", "ruff>=0.1.0"]
 
 [tool.maturin]
 module-name = "compio._core"
@@ -23,3 +25,39 @@ cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "C
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
+
+[tool.mypy]
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "I001",  # Import block is un-sorted or un-formatted
+    "UP045",  # Use X | None for type annotations
+]

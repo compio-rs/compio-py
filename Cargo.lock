@@ -86,6 +86,7 @@ name = "compio-py"
 version = "0.1.0"
 dependencies = [
  "compio",
+ "once_cell",
  "pyo3",
 ]
 
