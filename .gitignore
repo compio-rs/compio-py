@@ -9,6 +9,7 @@ wheels/
 # Environments
 /.venv/
 /uv.lock
+/.python-version
 
 # Cargo-generated files
 /target/
