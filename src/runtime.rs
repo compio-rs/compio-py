@@ -34,8 +34,8 @@ pub struct Runtime {
     epoch: Instant,
     stopping: Arc<AtomicBool>,
     driver: RefCell<Proactor>,
-    ready: RefCell<VecDeque<Arc<Handle>>>,
-    scheduled: RefCell<BinaryHeap<Arc<TimerHandle>>>,
+    ready: RefCell<VecDeque<Handle>>,
+    scheduled: RefCell<BinaryHeap<TimerHandle>>,
     timer_cancelled_count: Arc<AtomicUsize>,
 }
 
@@ -57,12 +57,12 @@ impl Runtime {
     }
 
     #[inline]
-    pub fn push_ready(&self, handle: Arc<Handle>) {
+    pub fn push_ready(&self, handle: Handle) {
         self.ready.borrow_mut().push_back(handle);
     }
 
     #[inline]
-    pub fn push_scheduled(&self, handle: Arc<TimerHandle>) {
+    pub fn push_scheduled(&self, handle: TimerHandle) {
         self.scheduled.borrow_mut().push(handle);
     }
 
@@ -75,7 +75,7 @@ impl Runtime {
     }
 
     #[inline(always)]
-    fn run_once(&self) -> PyResult<()> {
+    fn run_once(&self, call_exception_handler: &Py<PyAny>) -> PyResult<()> {
         let sched_count = self.scheduled.borrow().len();
         if sched_count > MIN_SCHEDULED_TIMER_HANDLES
             && self.timer_cancelled_count.load(atomic::Ordering::Acquire) as f64
@@ -152,15 +152,25 @@ impl Runtime {
         for _ in 0..ntodo {
             let handle = self.ready.borrow_mut().pop_front().expect("not empty");
             if !handle.cancelled() {
-                handle.run()?;
+                handle.run(call_exception_handler)?;
             }
         }
         Ok(())
     }
 
     pub fn run(&self) -> PyResult<()> {
+        let call_exception_handler = Python::attach(|py| {
+            self.pyloop
+                .bind(py)
+                .upgrade()
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Event loop is closed")
+                })
+                .and_then(|pyloop| pyloop.getattr("call_exception_handler"))
+                .map(|pyloop| pyloop.unbind())
+        })?;
         loop {
-            self.run_once()?;
+            self.run_once(&call_exception_handler)?;
             if self.stopping.load(atomic::Ordering::SeqCst) {
                 break Ok(());
             }

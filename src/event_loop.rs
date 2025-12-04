@@ -71,8 +71,9 @@ impl CompioLoop {
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = self.runtime()?;
         let handle = Handle::new(py, callback, args, context)?;
-        runtime.push_ready(handle.clone());
-        handle.into_py(py)
+        let rv = handle.as_py_any(py)?;
+        runtime.push_ready(handle);
+        Ok(rv)
     }
 
     #[pyo3(signature = (when, callback, *args, context=None))]
@@ -154,16 +155,10 @@ impl CompioLoop {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = TimerHandle::new(
-            py,
-            callback,
-            args,
-            context,
-            when,
-            runtime.timer_cancelled_count(),
-        )?;
-        runtime.push_scheduled(handle.clone());
-        handle.into_py(py)
+        let handle = TimerHandle::new(py, callback, args, context, when)?;
+        let rv = handle.as_py_any(py, runtime.timer_cancelled_count())?;
+        runtime.push_scheduled(handle);
+        Ok(rv)
     }
 }
 

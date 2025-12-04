@@ -102,7 +102,7 @@ class TestCompioLoop(unittest.TestCase):
         self.assertLess(
             object_diff,
             50,
-            f"Possible memory leak: {object_diff} objects leaked after 100 loop creations"
+            f"Possible memory leak: {object_diff} objects leaked after 100 loop creations",
         )
 
 
@@ -701,3 +701,258 @@ class TestCallLaterContextVars(unittest.TestCase):
         self.assertEqual(results, ["in_context"])
         loop.close()
 
+
+class TestHandleGetContext(unittest.TestCase):
+    def test_get_context_returns_context(self) -> None:
+        """Test that Handle.get_context() returns the context."""
+        loop = compio.CompioLoop()
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+
+        var.set("test_value")
+        handle = loop.call_soon(lambda: None)
+
+        ctx = handle.get_context()
+        self.assertIsInstance(ctx, contextvars.Context)
+        # The context should contain the value set at schedule time
+        self.assertEqual(ctx.run(var.get), "test_value")
+        loop.close()
+
+    def test_timer_handle_get_context(self) -> None:
+        """Test that TimerHandle.get_context() returns the context."""
+        loop = compio.CompioLoop()
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+
+        var.set("timer_value")
+        handle = loop.call_later(0.1, lambda: None)
+
+        ctx = handle.get_context()
+        self.assertIsInstance(ctx, contextvars.Context)
+        self.assertEqual(ctx.run(var.get), "timer_value")
+        loop.close()
+
+    def test_get_context_with_explicit_context(self) -> None:
+        """Test get_context with explicitly provided context."""
+        loop = compio.CompioLoop()
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+
+        var.set("explicit_value")
+        explicit_ctx = contextvars.copy_context()
+
+        var.set("changed_value")
+        handle = loop.call_soon(lambda: None, context=explicit_ctx)
+
+        ctx = handle.get_context()
+        self.assertEqual(ctx.run(var.get), "explicit_value")
+        loop.close()
+
+
+class TestExceptionHandler(unittest.TestCase):
+    def test_get_exception_handler_default(self) -> None:
+        """Test that get_exception_handler returns None by default."""
+        loop = compio.CompioLoop()
+        self.assertIsNone(loop.get_exception_handler())
+        loop.close()
+
+    def test_set_exception_handler(self) -> None:
+        """Test setting a custom exception handler."""
+        loop = compio.CompioLoop()
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            pass
+
+        loop.set_exception_handler(custom_handler)
+        self.assertIs(loop.get_exception_handler(), custom_handler)
+        loop.close()
+
+    def test_set_exception_handler_none(self) -> None:
+        """Test resetting exception handler to None."""
+        loop = compio.CompioLoop()
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            pass
+
+        loop.set_exception_handler(custom_handler)
+        loop.set_exception_handler(None)
+        self.assertIsNone(loop.get_exception_handler())
+        loop.close()
+
+    def test_set_exception_handler_not_callable(self) -> None:
+        """Test that setting non-callable raises TypeError."""
+        loop = compio.CompioLoop()
+
+        with self.assertRaises(TypeError):
+            loop.set_exception_handler("not a callable")  # type: ignore
+
+        loop.close()
+
+    def test_callback_exception_calls_exception_handler(self) -> None:
+        """Test that exceptions in callbacks invoke the exception handler."""
+        loop = compio.CompioLoop()
+        exceptions_handled: list[dict] = []
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            exceptions_handled.append(context)
+
+        def bad_callback() -> None:
+            raise ValueError("test error")
+
+        loop.set_exception_handler(custom_handler)
+        loop.call_soon(bad_callback)
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(len(exceptions_handled), 1)
+        self.assertEqual(exceptions_handled[0]["message"], "Exception in callback")
+        self.assertIsInstance(exceptions_handled[0]["exception"], ValueError)
+        loop.close()
+
+    def test_callback_exception_with_default_handler(self) -> None:
+        """Test that exceptions with default handler are logged."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        def bad_callback() -> None:
+            raise ValueError("test error")
+
+        # Default handler logs the exception, callback execution continues
+        loop.call_soon(bad_callback)
+        loop.call_soon(results.append, "after_error")
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["after_error"])
+        loop.close()
+
+    def test_system_exit_propagates(self) -> None:
+        """Test that SystemExit propagates through exception handling."""
+        loop = compio.CompioLoop()
+
+        def raise_system_exit() -> None:
+            raise SystemExit(42)
+
+        loop.call_soon(raise_system_exit)
+
+        with self.assertRaises(SystemExit) as cm:
+            loop.run_forever()
+
+        self.assertEqual(cm.exception.code, 42)
+        loop.close()
+
+    def test_keyboard_interrupt_propagates(self) -> None:
+        """Test that KeyboardInterrupt propagates through exception handling."""
+        loop = compio.CompioLoop()
+
+        def raise_keyboard_interrupt() -> None:
+            raise KeyboardInterrupt()
+
+        loop.call_soon(raise_keyboard_interrupt)
+
+        with self.assertRaises(KeyboardInterrupt):
+            loop.run_forever()
+
+        loop.close()
+
+    def test_exception_handler_receives_handle_context(self) -> None:
+        """Test that exception handler can access handle's context."""
+        loop = compio.CompioLoop()
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+        captured_values: list[str] = []
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            # The handler runs in the handle's context
+            captured_values.append(var.get())
+
+        def bad_callback() -> None:
+            raise ValueError("test error")
+
+        var.set("callback_context_value")
+        ctx = contextvars.copy_context()
+
+        loop.set_exception_handler(custom_handler)
+        var.set("different_value")
+        loop.call_soon(bad_callback, context=ctx)
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+
+        # The exception handler should run in the handle's context
+        self.assertEqual(captured_values, ["callback_context_value"])
+        loop.close()
+
+    def test_call_exception_handler_directly(self) -> None:
+        """Test calling call_exception_handler directly."""
+        loop = compio.CompioLoop()
+        exceptions_handled: list[dict] = []
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            exceptions_handled.append(context)
+
+        loop.set_exception_handler(custom_handler)
+        loop.call_exception_handler({"message": "Test message", "custom_key": "value"})
+
+        self.assertEqual(len(exceptions_handled), 1)
+        self.assertEqual(exceptions_handled[0]["message"], "Test message")
+        self.assertEqual(exceptions_handled[0]["custom_key"], "value")
+        loop.close()
+
+    def test_exception_in_custom_handler_falls_back(self) -> None:
+        """Test that exception in custom handler falls back to default."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        def bad_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            raise RuntimeError("handler error")
+
+        def bad_callback() -> None:
+            raise ValueError("callback error")
+
+        loop.set_exception_handler(bad_handler)
+        loop.call_soon(bad_callback)
+        loop.call_soon(results.append, "continued")
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+
+        # Loop should continue even if custom handler fails
+        self.assertEqual(results, ["continued"])
+        loop.close()
+
+
+class TestCallLaterExceptions(unittest.TestCase):
+    def test_exception_in_timer_callback(self) -> None:
+        """Test that exceptions in timer callbacks invoke exception handler."""
+        loop = compio.CompioLoop()
+        exceptions_handled: list[dict] = []
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            exceptions_handled.append(context)
+
+        def bad_callback() -> None:
+            raise ValueError("timer error")
+
+        loop.set_exception_handler(custom_handler)
+        loop.call_later(0.01, bad_callback)
+        loop.call_later(0.02, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(len(exceptions_handled), 1)
+        self.assertIsInstance(exceptions_handled[0]["exception"], ValueError)
+        loop.close()
+
+    def test_timer_exception_does_not_stop_loop(self) -> None:
+        """Test that timer exceptions don't stop the loop."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        def bad_callback() -> None:
+            raise ValueError("timer error")
+
+        def custom_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            results.append("exception_handled")
+
+        loop.set_exception_handler(custom_handler)
+        loop.call_later(0.01, bad_callback)
+        loop.call_later(0.02, results.append, "after")
+        loop.call_later(0.03, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["exception_handled", "after"])
+        loop.close()

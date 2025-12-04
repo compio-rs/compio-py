@@ -3,54 +3,36 @@
 
 use std::{
     cmp, iter,
+    ops::Deref,
     sync::{
         Arc,
         atomic::{self, AtomicBool, AtomicUsize},
     },
 };
 
-use pyo3::{IntoPyObjectExt, prelude::*, types::PyTuple};
+use pyo3::{
+    exceptions::{PyKeyboardInterrupt, PySystemExit},
+    prelude::*,
+    pyclass::CompareOp,
+    sync::PyOnceLock,
+    types::{PyDict, PyTuple},
+};
 
-pub struct Handle {
+struct Shared {
     callback: Py<PyAny>,
     args: Py<PyTuple>,
     context: Py<PyAny>,
     cancelled: AtomicBool,
 }
 
-impl Handle {
-    pub fn new(
-        py: Python,
-        callback: Py<PyAny>,
-        args: Py<PyTuple>,
-        context: Option<Py<PyAny>>,
-    ) -> PyResult<Arc<Self>> {
-        // If no context is provided, copy the current context
-        let context = match context {
-            Some(ctx) => ctx,
-            None => crate::import::copy_context(py)?.unbind(),
-        };
-        Ok(Arc::new(Self {
+impl Shared {
+    #[inline]
+    fn new(callback: Py<PyAny>, args: Py<PyTuple>, context: Py<PyAny>) -> Arc<Self> {
+        Arc::new(Self {
             callback,
             args,
             context,
             cancelled: AtomicBool::new(false),
-        }))
-    }
-
-    pub fn run(&self) -> PyResult<()> {
-        // Equivalent to: self.context.run(callback, *args)
-        Python::attach(|py| {
-            // Build argument list: [callback, arg1, arg2, ...]
-            let args = iter::once(self.callback.bind(py).clone())
-                .chain(self.args.bind(py).iter())
-                .collect::<Vec<_>>();
-            // Call the context.run() method
-            self.context
-                .bind(py)
-                .getattr("run")?
-                .call1(PyTuple::new(py, args)?)
-                .map(drop)
         })
     }
 
@@ -67,19 +49,85 @@ impl Handle {
     }
 
     #[inline]
-    pub fn cancelled(&self) -> bool {
+    fn cancelled(&self) -> bool {
         self.cancelled.load(atomic::Ordering::Acquire)
     }
+}
 
-    pub fn into_py(self: Arc<Self>, py: Python) -> PyResult<Bound<PyAny>> {
-        PyHandle(self).into_bound_py_any(py)
+pub struct Handle {
+    shared: Arc<Shared>,
+    pyhandle: PyOnceLock<Py<PyAny>>,
+}
+
+impl Handle {
+    pub fn new(
+        py: Python,
+        callback: Py<PyAny>,
+        args: Py<PyTuple>,
+        context: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        // If no context is provided, copy the current context
+        let context = match context {
+            Some(ctx) => ctx,
+            None => crate::import::copy_context(py)?.unbind(),
+        };
+        let shared = Shared::new(callback, args, context);
+        let pyhandle = PyOnceLock::new();
+        Ok(Self { shared, pyhandle })
+    }
+
+    pub fn run(&self, call_exception_handler: &Py<PyAny>) -> PyResult<()> {
+        Python::attach(|py| {
+            // Build argument list: [callback, arg1, arg2, ...]
+            let shared = self.shared.deref();
+            let args = iter::once(shared.callback.bind(py).clone())
+                .chain(shared.args.bind(py).iter())
+                .collect::<Vec<_>>();
+
+            // Equivalent to: self.context.run(callback, *args)
+            let rv = shared
+                .context
+                .bind(py)
+                .getattr("run")
+                .and_then(|run| run.call1(PyTuple::new(py, args)?));
+
+            // Handle exceptions
+            match rv {
+                Ok(_) => Ok(()),
+
+                // Reraise SystemExit and KeyboardInterrupt
+                Err(e) if e.is_instance_of::<PySystemExit>(py) => Err(e),
+                Err(e) if e.is_instance_of::<PyKeyboardInterrupt>(py) => Err(e),
+
+                // Call the loop's exception handler for other exceptions
+                Err(e) => {
+                    let context = PyDict::new(py);
+                    context.set_item("message", "Exception in callback")?;
+                    context.set_item("exception", e)?;
+                    context.set_item("handle", self.as_py_any(py)?)?;
+                    call_exception_handler.bind(py).call1((context,)).map(drop)
+                }
+            }
+        })
+    }
+
+    #[inline]
+    pub fn cancelled(&self) -> bool {
+        self.shared.cancelled()
+    }
+
+    pub fn as_py_any<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.pyhandle
+            .get_or_try_init(py, || {
+                Py::new(py, PyHandle(self.shared.clone())).map(|obj| obj.into_any())
+            })
+            .map(|obj| obj.bind(py).clone())
     }
 }
 
 pub struct TimerHandle {
-    handle: Arc<Handle>,
+    handle: Handle,
     when: f64,
-    timer_cancelled_count: Arc<AtomicUsize>,
 }
 
 impl TimerHandle {
@@ -89,18 +137,14 @@ impl TimerHandle {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
         when: f64,
-        timer_cancelled_count: Arc<AtomicUsize>,
-    ) -> PyResult<Arc<Self>> {
-        Ok(Arc::new(Self {
-            handle: Handle::new(py, callback, args, context)?,
-            when,
-            timer_cancelled_count,
-        }))
+    ) -> PyResult<Self> {
+        let handle = Handle::new(py, callback, args, context)?;
+        Ok(Self { handle, when })
     }
 
     #[inline]
     pub fn cancelled(&self) -> bool {
-        self.handle.cancelled()
+        self.handle.shared.cancelled()
     }
 
     #[inline]
@@ -108,14 +152,28 @@ impl TimerHandle {
         self.when
     }
 
-    pub fn into_base(self: Arc<Self>) -> Arc<Handle> {
-        self.handle.clone()
+    pub fn into_base(self) -> Handle {
+        self.handle
     }
 
-    pub fn into_py(self: Arc<Self>, py: Python) -> PyResult<Bound<PyAny>> {
-        let base = PyHandle(self.handle.clone());
-        let initializer = PyClassInitializer::from(base).add_subclass(PyTimerHandle(self));
-        Py::new(py, initializer)?.into_bound_py_any(py)
+    pub fn as_py_any<'py>(
+        &self,
+        py: Python<'py>,
+        timer_cancelled_count: Arc<AtomicUsize>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.handle
+            .pyhandle
+            .get_or_try_init(py, || {
+                let base = PyHandle(self.handle.shared.clone());
+                let handle = PyTimerHandle {
+                    shared: self.handle.shared.clone(),
+                    when: self.when,
+                    timer_cancelled_count,
+                };
+                let initializer = PyClassInitializer::from(base).add_subclass(handle);
+                Py::new(py, initializer).map(|obj| obj.into_any())
+            })
+            .map(|obj| obj.bind(py).clone())
     }
 }
 
@@ -143,8 +201,8 @@ impl Ord for TimerHandle {
     }
 }
 
-#[pyclass(name = "Handle", subclass)]
-struct PyHandle(Arc<Handle>);
+#[pyclass(name = "Handle", subclass, weakref)]
+struct PyHandle(Arc<Shared>);
 
 #[pymethods]
 impl PyHandle {
@@ -155,28 +213,59 @@ impl PyHandle {
     fn cancelled(&self) -> bool {
         self.0.cancelled()
     }
+
+    fn get_context<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
+        self.0.context.bind(py).clone()
+    }
 }
 
 #[pyclass(name = "TimerHandle", extends=PyHandle)]
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-struct PyTimerHandle(Arc<TimerHandle>);
+struct PyTimerHandle {
+    shared: Arc<Shared>,
+    when: f64,
+    timer_cancelled_count: Arc<AtomicUsize>,
+}
 
 #[pymethods]
 impl PyTimerHandle {
     fn cancel(&self) {
-        if self.0.handle.cancel() {
-            self.0
-                .timer_cancelled_count
+        if self.shared.cancel() {
+            self.timer_cancelled_count
                 .fetch_add(1, atomic::Ordering::AcqRel);
         }
     }
 
     fn when(&self) -> f64 {
-        self.0.when()
+        self.when
     }
 
     fn __hash__(&self) -> u64 {
-        self.0.when().to_bits()
+        self.when.to_bits()
+    }
+
+    fn __richcmp__(&self, other: &Self, op: CompareOp, py: Python) -> PyResult<bool> {
+        Ok(match op {
+            CompareOp::Eq => self.eq(other, py)?,
+            CompareOp::Ne => !self.eq(other, py)?,
+            CompareOp::Lt => self.when < other.when,
+            CompareOp::Le => self.when < other.when || self.eq(other, py)?,
+            CompareOp::Gt => self.when > other.when,
+            CompareOp::Ge => self.when > other.when || self.eq(other, py)?,
+        })
+    }
+}
+
+impl PyTimerHandle {
+    fn eq(&self, other: &Self, py: Python) -> PyResult<bool> {
+        if self.when == other.when {
+            let this = self.shared.deref();
+            let that = other.shared.deref();
+            Ok(this.callback.bind(py).eq(that.callback.bind(py))?
+                && this.args.bind(py).eq(that.args.bind(py))?
+                && this.cancelled() == that.cancelled())
+        } else {
+            Ok(false)
+        }
     }
 }
 
