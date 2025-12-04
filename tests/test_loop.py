@@ -392,3 +392,312 @@ class TestRepr(unittest.TestCase):
         loop.close()
         repr_after = repr(loop)
         self.assertIn("closed=True", repr_after)
+
+
+class TestTime(unittest.TestCase):
+    def test_time_returns_float(self) -> None:
+        """Test that time() returns a float."""
+        loop = compio.CompioLoop()
+        t = loop.time()
+        self.assertIsInstance(t, float)
+        self.assertGreaterEqual(t, 0)
+        loop.close()
+
+    def test_time_increases(self) -> None:
+        """Test that time() increases monotonically."""
+        loop = compio.CompioLoop()
+        t1 = loop.time()
+        t2 = loop.time()
+        self.assertGreaterEqual(t2, t1)
+        loop.close()
+
+
+class TestCallLater(unittest.TestCase):
+    def test_call_later_returns_timer_handle(self) -> None:
+        """Test that call_later returns a TimerHandle."""
+        loop = compio.CompioLoop()
+        handle = loop.call_later(0.1, lambda: None)
+        self.assertIsInstance(handle, compio.TimerHandle)
+        loop.close()
+
+    def test_call_later_execution(self) -> None:
+        """Test that call_later executes callback after delay."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        loop.call_later(0.01, results.append, "delayed")
+        loop.call_later(0.02, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["delayed"])
+        loop.close()
+
+    def test_call_later_order(self) -> None:
+        """Test that call_later callbacks execute in time order."""
+        loop = compio.CompioLoop()
+        results: list[int] = []
+
+        loop.call_later(0.03, results.append, 3)
+        loop.call_later(0.01, results.append, 1)
+        loop.call_later(0.02, results.append, 2)
+        loop.call_later(0.04, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, [1, 2, 3])
+        loop.close()
+
+    def test_call_later_with_args(self) -> None:
+        """Test call_later with arguments."""
+        loop = compio.CompioLoop()
+        results: list[tuple[int, int, int]] = []
+
+        def callback(a: int, b: int, c: int) -> None:
+            results.append((a, b, c))
+
+        loop.call_later(0.01, callback, 1, 2, 3)
+        loop.call_later(0.02, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, [(1, 2, 3)])
+        loop.close()
+
+    def test_call_later_zero_delay(self) -> None:
+        """Test call_later with zero delay."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        loop.call_later(0, results.append, "zero_delay")
+        loop.call_soon(results.append, "soon")
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+
+        # call_soon should execute before call_later(0)
+        self.assertEqual(results, ["soon", "zero_delay"])
+        loop.close()
+
+
+class TestCallAt(unittest.TestCase):
+    def test_call_at_returns_timer_handle(self) -> None:
+        """Test that call_at returns a TimerHandle."""
+        loop = compio.CompioLoop()
+        when = loop.time() + 0.1
+        handle = loop.call_at(when, lambda: None)
+        self.assertIsInstance(handle, compio.TimerHandle)
+        loop.close()
+
+    def test_call_at_execution(self) -> None:
+        """Test that call_at executes callback at specified time."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        when = loop.time() + 0.01
+        loop.call_at(when, results.append, "scheduled")
+        loop.call_at(when + 0.01, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["scheduled"])
+        loop.close()
+
+    def test_call_at_order(self) -> None:
+        """Test that call_at callbacks execute in time order."""
+        loop = compio.CompioLoop()
+        results: list[int] = []
+        base = loop.time()
+
+        loop.call_at(base + 0.03, results.append, 3)
+        loop.call_at(base + 0.01, results.append, 1)
+        loop.call_at(base + 0.02, results.append, 2)
+        loop.call_at(base + 0.04, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, [1, 2, 3])
+        loop.close()
+
+    def test_call_at_past_time(self) -> None:
+        """Test call_at with time in the past executes immediately."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        # Schedule at a time in the past
+        past_time = loop.time() - 1.0
+        loop.call_at(past_time, results.append, "past")
+        loop.call_soon(loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["past"])
+        loop.close()
+
+
+class TestTimerHandle(unittest.TestCase):
+    def test_timer_handle_when(self) -> None:
+        """Test that TimerHandle.when() returns scheduled time."""
+        loop = compio.CompioLoop()
+        when = loop.time() + 0.5
+        handle = loop.call_at(when, lambda: None)
+
+        self.assertAlmostEqual(handle.when(), when, places=3)
+        loop.close()
+
+    def test_timer_handle_cancel(self) -> None:
+        """Test that cancelled TimerHandle's callback is not executed."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        handle = loop.call_later(0.01, results.append, "cancelled")
+        loop.call_later(0.02, results.append, "executed")
+        handle.cancel()
+        loop.call_later(0.03, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["executed"])
+        loop.close()
+
+    def test_timer_handle_cancelled_state(self) -> None:
+        """Test TimerHandle.cancelled() returns correct state."""
+        loop = compio.CompioLoop()
+        handle = loop.call_later(0.1, lambda: None)
+
+        self.assertFalse(handle.cancelled())
+        handle.cancel()
+        self.assertTrue(handle.cancelled())
+        loop.close()
+
+    def test_timer_handle_is_handle_subclass(self) -> None:
+        """Test that TimerHandle is a subclass of Handle."""
+        loop = compio.CompioLoop()
+        handle = loop.call_later(0.1, lambda: None)
+
+        self.assertIsInstance(handle, compio.Handle)
+        self.assertIsInstance(handle, compio.TimerHandle)
+        loop.close()
+
+    def test_timer_handle_hashable(self) -> None:
+        """Test that TimerHandle is hashable."""
+        loop = compio.CompioLoop()
+        handle1 = loop.call_later(0.1, lambda: None)
+        handle2 = loop.call_later(0.2, lambda: None)
+
+        # Should be hashable
+        h1 = hash(handle1)
+        h2 = hash(handle2)
+        self.assertIsInstance(h1, int)
+        self.assertIsInstance(h2, int)
+
+        # Can be used in sets
+        handle_set = {handle1, handle2}
+        self.assertEqual(len(handle_set), 2)
+        loop.close()
+
+
+class TestTimerHandleCancellation(unittest.TestCase):
+    def test_mass_cancel_cleanup(self) -> None:
+        """Test that mass cancellation of timers triggers cleanup."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        # Create many timer handles and cancel most of them
+        # This tests the MIN_SCHEDULED_TIMER_HANDLES and
+        # MIN_CANCELLED_TIMER_HANDLES_FRACTION logic
+        handles = []
+        for i in range(150):
+            h = loop.call_later(1.0, results.append, f"timer_{i}")
+            handles.append(h)
+
+        # Cancel more than 50% of the handles
+        for i in range(100):
+            handles[i].cancel()
+
+        # Add a callback that will actually run
+        loop.call_later(0.01, results.append, "survivor")
+        loop.call_later(0.02, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["survivor"])
+        loop.close()
+
+    def test_cancel_multiple_times(self) -> None:
+        """Test that cancelling a timer handle multiple times is safe."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        handle = loop.call_later(0.01, results.append, "should_not_run")
+
+        # Cancel multiple times - should not cause issues
+        handle.cancel()
+        handle.cancel()
+        handle.cancel()
+
+        self.assertTrue(handle.cancelled())
+
+        loop.call_later(0.02, results.append, "should_run")
+        loop.call_later(0.03, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["should_run"])
+        loop.close()
+
+    def test_cancel_at_head_of_queue(self) -> None:
+        """Test that cancelled timers at head of queue are properly removed."""
+        loop = compio.CompioLoop()
+        results: list[str] = []
+
+        # Schedule timers in order
+        h1 = loop.call_later(0.01, results.append, "first")
+        loop.call_later(0.02, results.append, "second")
+        loop.call_later(0.03, loop.stop)
+
+        # Cancel the first one
+        h1.cancel()
+
+        loop.run_forever()
+
+        self.assertEqual(results, ["second"])
+        loop.close()
+
+
+class TestCallLaterContextVars(unittest.TestCase):
+    def test_call_later_copies_context(self) -> None:
+        """Test that call_later copies current context."""
+        loop = compio.CompioLoop()
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+        results: list[str] = []
+
+        var.set("original")
+
+        def callback() -> None:
+            results.append(var.get())
+
+        loop.call_later(0.01, callback)
+
+        # Change value after scheduling
+        var.set("changed")
+
+        loop.call_later(0.02, loop.stop)
+        loop.run_forever()
+
+        # Callback should see "original" since context was copied at schedule time
+        self.assertEqual(results, ["original"])
+        loop.close()
+
+    def test_call_at_with_explicit_context(self) -> None:
+        """Test call_at with explicit context argument."""
+        loop = compio.CompioLoop()
+        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+        results: list[str] = []
+
+        def callback() -> None:
+            results.append(var.get())
+
+        # Create a context with a specific value
+        var.set("in_context")
+        ctx = contextvars.copy_context()
+
+        # Schedule with explicit context
+        when = loop.time() + 0.01
+        loop.call_at(when, callback, context=ctx)
+        loop.call_at(when + 0.01, loop.stop)
+        loop.run_forever()
+
+        self.assertEqual(results, ["in_context"])
+        loop.close()
+

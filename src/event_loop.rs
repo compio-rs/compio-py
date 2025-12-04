@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
 // Copyright 2025 Fantix King
 
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{self, AtomicBool},
+};
 
 use pyo3::{
     exceptions::PyRuntimeError,
@@ -10,7 +13,7 @@ use pyo3::{
 };
 
 use crate::{
-    handle::Handle,
+    handle::{Handle, TimerHandle},
     owned::{self, OwnedRefCell},
     runtime::Runtime,
 };
@@ -72,6 +75,36 @@ impl CompioLoop {
         handle.into_py(py)
     }
 
+    #[pyo3(signature = (when, callback, *args, context=None))]
+    fn call_at<'py>(
+        &self,
+        py: Python<'py>,
+        when: f64,
+        callback: Py<PyAny>,
+        args: Py<PyTuple>,
+        context: Option<Py<PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.call_at_impl(self.runtime()?, py, when, callback, args, context)
+    }
+
+    #[pyo3(signature = (delay, callback, *args, context=None))]
+    fn call_later<'py>(
+        &self,
+        py: Python<'py>,
+        delay: f64,
+        callback: Py<PyAny>,
+        args: Py<PyTuple>,
+        context: Option<Py<PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = self.runtime()?;
+        let when = runtime.since_epoch().as_secs_f64() + delay;
+        self.call_at_impl(runtime, py, when, callback, args, context)
+    }
+
+    fn time(&self) -> PyResult<f64> {
+        Ok(self.runtime()?.since_epoch().as_secs_f64())
+    }
+
     fn run_forever(&self, py: Python) -> PyResult<()> {
         py.detach(|| {
             let _guard = self.runtime.acquire(false).map_err(|_| {
@@ -83,8 +116,7 @@ impl CompioLoop {
     }
 
     fn stop(&self) {
-        self.stopping
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.stopping.store(true, atomic::Ordering::SeqCst);
     }
 
     fn close(slf: &Bound<Self>) -> PyResult<()> {
@@ -111,6 +143,28 @@ impl CompioLoop {
             )),
         }
     }
+
+    #[inline]
+    fn call_at_impl<'py>(
+        &self,
+        runtime: owned::Ref<Runtime>,
+        py: Python<'py>,
+        when: f64,
+        callback: Py<PyAny>,
+        args: Py<PyTuple>,
+        context: Option<Py<PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = TimerHandle::new(
+            py,
+            callback,
+            args,
+            context,
+            when,
+            runtime.timer_cancelled_count(),
+        )?;
+        runtime.push_scheduled(handle.clone());
+        handle.into_py(py)
+    }
 }
 
 struct StoreFalseGuard(Arc<AtomicBool>);
@@ -118,7 +172,7 @@ struct StoreFalseGuard(Arc<AtomicBool>);
 impl Drop for StoreFalseGuard {
     #[inline]
     fn drop(&mut self) {
-        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.0.store(false, atomic::Ordering::SeqCst);
     }
 }
 
