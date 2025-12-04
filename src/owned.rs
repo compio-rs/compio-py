@@ -528,25 +528,37 @@ mod tests {
 
     #[test]
     fn test_acquire_from_different_thread() {
+        use std::sync::Barrier;
+
         let cell = Arc::new(OwnedRefCell::default());
         cell.init(100).unwrap();
 
+        // Barrier to synchronize: wait for both threads to be ready
+        let barrier = Arc::new(Barrier::new(2));
+
         let cell_clone = Arc::clone(&cell);
+        let barrier_clone = Arc::clone(&barrier);
 
         let handle = thread::spawn(move || {
             // Acquire in thread
             let _guard = cell_clone.acquire(true).unwrap();
-            thread::sleep(std::time::Duration::from_millis(50));
+            // Signal that we've acquired ownership
+            barrier_clone.wait();
+            // Wait again before releasing
+            barrier_clone.wait();
         });
 
-        // Give thread time to acquire
-        thread::sleep(std::time::Duration::from_millis(10));
+        // Wait for other thread to acquire ownership
+        barrier.wait();
 
         // Main thread should fail to acquire while other thread holds it
         let result = cell.acquire(true);
         assert!(result.is_err());
 
-        // Wait for thread to release
+        // Signal the other thread to release
+        barrier.wait();
+
+        // Wait for thread to complete
         handle.join().unwrap();
 
         // Now main thread can acquire

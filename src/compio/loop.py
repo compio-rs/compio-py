@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
 # Copyright 2025 Fantix King
 
+from __future__ import annotations
+from collections.abc import Callable
+from typing import Any, Optional, TypeAlias
+
 import asyncio
 import enum
 import traceback
 from asyncio.log import logger
 
 from compio import _core
+
+
+_Context: TypeAlias = dict[str, Any]
+_ExceptionHandler: TypeAlias = Callable[[asyncio.AbstractEventLoop, _Context], object]
 
 
 class DriverType(enum.StrEnum):
@@ -16,6 +24,8 @@ class DriverType(enum.StrEnum):
 
 
 class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
+    _exception_handler: Optional[_ExceptionHandler]
+
     __slots__ = ("_exception_handler",)
 
     def __init__(self) -> None:
@@ -25,7 +35,7 @@ class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
     def get_driver_type(self) -> DriverType:
         return DriverType(super().get_driver_type())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         try:
             driver_type = f"driver={self.get_driver_type().value} "
         except RuntimeError:
@@ -39,11 +49,11 @@ class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
 
     # Exception handling methods copied from CPython 3.13
 
-    def get_exception_handler(self):
+    def get_exception_handler(self) -> Optional[_ExceptionHandler]:
         """Return an exception handler, or None if the default one is in use."""
         return self._exception_handler
 
-    def set_exception_handler(self, handler):
+    def set_exception_handler(self, handler: Optional[_ExceptionHandler]) -> None:
         """Set handler as the new event loop exception handler.
 
         If handler is None, the default exception handler will
@@ -59,7 +69,7 @@ class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
             raise TypeError(f"A callable object or None is expected, got {handler!r}")
         self._exception_handler = handler
 
-    def default_exception_handler(self, context):
+    def default_exception_handler(self, context: _Context) -> None:
         """Default exception handler.
 
         This is called when an exception occurs and no exception
@@ -79,6 +89,7 @@ class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
             message = "Unhandled exception in event loop"
 
         exception = context.get("exception")
+        exc_info: Any
         if exception is not None:
             exc_info = (type(exception), exception, exception.__traceback__)
         else:
@@ -103,7 +114,7 @@ class CompioLoop(_core.CompioLoop, asyncio.AbstractEventLoop):
 
         logger.error("\n".join(log_lines), exc_info=exc_info)
 
-    def call_exception_handler(self, context):
+    def call_exception_handler(self, context: _Context) -> None:
         """Call the current event loop's exception handler.
 
         The context argument is a dict containing the following keys:

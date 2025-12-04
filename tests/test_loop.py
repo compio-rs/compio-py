@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
 # Copyright 2025 Fantix King
 
+# TODO: drop the following mypy disable when the loop is done
+# mypy: disable-error-code="abstract"
+
 import asyncio
 import contextvars
 import gc
@@ -17,29 +20,29 @@ def has_io_uring_support() -> bool:
     If the sysctl doesn't exist, falls back to checking /proc/kallsyms for io_uring symbols.
     Returns True if io_uring is available (not disabled), False otherwise.
     """
-    if not sys.platform.startswith("linux"):
-        return False
-
-    try:
-        # Check if kernel.io_uring_disabled is set to 0 (enabled)
-        with open("/proc/sys/kernel/io_uring_disabled") as f:
-            value = f.read().strip()
-            return value == "0"
-    except FileNotFoundError:
-        # If the sysctl doesn't exist, check /proc/kallsyms as fallback
-        # to see if io_uring symbols are present in the kernel
+    if sys.platform.startswith("linux"):
         try:
-            with open("/proc/kallsyms") as f:
-                for line in f:
-                    # Look for io_uring_setup symbol which is the main entry point
-                    if "io_uring_setup" in line:
-                        return True
+            # Check if kernel.io_uring_disabled is set to 0 (enabled)
+            with open("/proc/sys/kernel/io_uring_disabled") as f:
+                value = f.read().strip()
+                return value == "0"
+        except FileNotFoundError:
+            # If the sysctl doesn't exist, check /proc/kallsyms as fallback
+            # to see if io_uring symbols are present in the kernel
+            try:
+                with open("/proc/kallsyms") as f:
+                    for line in f:
+                        # Look for io_uring_setup symbol which is the main entry point
+                        if "io_uring_setup" in line:
+                            return True
+                return False
+            except (FileNotFoundError, PermissionError):
+                # If we can't read kallsyms, assume io_uring is not available
+                return False
+        except PermissionError:
+            # If we can't read the sysctl due to permissions, assume unavailable
             return False
-        except (FileNotFoundError, PermissionError):
-            # If we can't read kallsyms, assume io_uring is not available
-            return False
-    except PermissionError:
-        # If we can't read the sysctl due to permissions, assume unavailable
+    else:
         return False
 
 
@@ -702,48 +705,49 @@ class TestCallLaterContextVars(unittest.TestCase):
         loop.close()
 
 
-class TestHandleGetContext(unittest.TestCase):
-    def test_get_context_returns_context(self) -> None:
-        """Test that Handle.get_context() returns the context."""
-        loop = compio.CompioLoop()
-        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+if sys.version_info >= (3, 12):
+    class TestHandleGetContext(unittest.TestCase):
+        def test_get_context_returns_context(self) -> None:
+            """Test that Handle.get_context() returns the context."""
+            loop = compio.CompioLoop()
+            var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
 
-        var.set("test_value")
-        handle = loop.call_soon(lambda: None)
+            var.set("test_value")
+            handle = loop.call_soon(lambda: None)
 
-        ctx = handle.get_context()
-        self.assertIsInstance(ctx, contextvars.Context)
-        # The context should contain the value set at schedule time
-        self.assertEqual(ctx.run(var.get), "test_value")
-        loop.close()
+            ctx = handle.get_context()
+            self.assertIsInstance(ctx, contextvars.Context)
+            # The context should contain the value set at schedule time
+            self.assertEqual(ctx.run(var.get), "test_value")
+            loop.close()
 
-    def test_timer_handle_get_context(self) -> None:
-        """Test that TimerHandle.get_context() returns the context."""
-        loop = compio.CompioLoop()
-        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+        def test_timer_handle_get_context(self) -> None:
+            """Test that TimerHandle.get_context() returns the context."""
+            loop = compio.CompioLoop()
+            var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
 
-        var.set("timer_value")
-        handle = loop.call_later(0.1, lambda: None)
+            var.set("timer_value")
+            handle = loop.call_later(0.1, lambda: None)
 
-        ctx = handle.get_context()
-        self.assertIsInstance(ctx, contextvars.Context)
-        self.assertEqual(ctx.run(var.get), "timer_value")
-        loop.close()
+            ctx = handle.get_context()
+            self.assertIsInstance(ctx, contextvars.Context)
+            self.assertEqual(ctx.run(var.get), "timer_value")
+            loop.close()
 
-    def test_get_context_with_explicit_context(self) -> None:
-        """Test get_context with explicitly provided context."""
-        loop = compio.CompioLoop()
-        var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
+        def test_get_context_with_explicit_context(self) -> None:
+            """Test get_context with explicitly provided context."""
+            loop = compio.CompioLoop()
+            var: contextvars.ContextVar[str] = contextvars.ContextVar("test_var")
 
-        var.set("explicit_value")
-        explicit_ctx = contextvars.copy_context()
+            var.set("explicit_value")
+            explicit_ctx = contextvars.copy_context()
 
-        var.set("changed_value")
-        handle = loop.call_soon(lambda: None, context=explicit_ctx)
+            var.set("changed_value")
+            handle = loop.call_soon(lambda: None, context=explicit_ctx)
 
-        ctx = handle.get_context()
-        self.assertEqual(ctx.run(var.get), "explicit_value")
-        loop.close()
+            ctx = handle.get_context()
+            self.assertEqual(ctx.run(var.get), "explicit_value")
+            loop.close()
 
 
 class TestExceptionHandler(unittest.TestCase):

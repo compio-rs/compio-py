@@ -2,9 +2,10 @@
 # Copyright 2025 Fantix King
 
 from __future__ import annotations
+from collections.abc import Callable
 from typing import Any, Optional, TypeVarTuple, Unpack
 
-from collections.abc import Callable
+import asyncio
 from contextvars import Context
 
 class Handle:
@@ -29,26 +30,27 @@ class CompioLoop:
     def is_running(self) -> bool: ...
     def is_closed(self) -> bool: ...
     def get_driver_type(self) -> str: ...
+    # Pretend call_*() methods return asyncio Handles for type checking purposes
     def call_soon(
         self,
         callback: Callable[[Unpack[_Ts]], Any],
         *args: Unpack[_Ts],
         context: Optional[Context] = None,
-    ) -> Handle: ...
+    ) -> asyncio.Handle: ...
     def call_at(
         self,
         when: float,
         callback: Callable[[Unpack[_Ts]], Any],
         *args: Unpack[_Ts],
         context: Optional[Context] = None,
-    ) -> TimerHandle: ...
+    ) -> asyncio.TimerHandle: ...
     def call_later(
         self,
         delay: float,
         callback: Callable[[Unpack[_Ts]], Any],
         *args: Unpack[_Ts],
         context: Optional[Context] = None,
-    ) -> TimerHandle: ...
+    ) -> asyncio.TimerHandle: ...
     def time(self) -> float: ...
     def run_forever(self) -> None: ...
     def stop(self) -> None: ...

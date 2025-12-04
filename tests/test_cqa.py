@@ -13,7 +13,7 @@ class TestCQA(unittest.TestCase):
     def test_mypy(self) -> None:
         """Run mypy type checking on the codebase"""
         result = subprocess.run(
-            [sys.executable, "-m", "mypy", "src/compio/_core.pyi"],
+            [sys.executable, "-m", "mypy", "src", "tests"],
             env={**os.environ, "FORCE_COLOR": "1"},
             capture_output=True,
             text=True,
