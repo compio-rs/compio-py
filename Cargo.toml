@@ -13,5 +13,11 @@ crate-type = ["cdylib"]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
 # "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
 pyo3 = { version = "0.27.1", features = ["extension-module", "abi3-py311"] }
-compio = { git = "https://github.com/compio-rs/compio.git", default-features = false, features = ["io-uring", "polling"] }
 once_cell = "1.21.3"
+scoped-tls = "1.0.1"
+
+[dependencies.compio]
+git = "https://github.com/compio-rs/compio.git"
+rev = "5e8326fed91973c1fb5aa404b689c46d1d6501c4"
+default-features = false
+features = ["io-uring", "polling"]

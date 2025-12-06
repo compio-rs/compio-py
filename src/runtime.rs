@@ -5,14 +5,19 @@ use std::{
     cell::RefCell,
     collections::{BinaryHeap, VecDeque},
     io,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{self, AtomicBool, AtomicUsize},
     },
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
 
-use compio::driver::{DriverType, Proactor};
+use compio::{
+    BufResult,
+    driver::{DriverType, Key, OpCode, Proactor, PushEntry},
+};
 use pyo3::{prelude::*, types::PyWeakrefReference};
 
 use crate::handle::{Handle, TimerHandle};
@@ -27,6 +32,43 @@ const MIN_CANCELLED_TIMER_HANDLES_FRACTION: f64 = 0.5;
 
 /// Maximum timeout passed to select to avoid OS limitations
 const MAXIMUM_SELECT_TIMEOUT: Duration = Duration::from_hours(24);
+
+scoped_tls::scoped_thread_local!(static CURRENT_RUNTIME: Runtime);
+
+enum OpOrKey<T> {
+    Op(T),
+    Key(Key<T>),
+}
+
+impl<T> Unpin for OpOrKey<T> {}
+
+struct OpFuture<T> {
+    state: Option<OpOrKey<T>>,
+}
+
+impl<T: OpCode + 'static> Future for OpFuture<T> {
+    type Output = BufResult<usize, T>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        CURRENT_RUNTIME.with(|runtime| {
+            let state = self.state.take().expect("polled after completion");
+            let mut driver = runtime.driver.borrow_mut();
+            let entry = match state {
+                OpOrKey::Op(op) => driver.push(op),
+                OpOrKey::Key(key) => driver.pop(key),
+            };
+            match entry {
+                PushEntry::Pending(mut key) => {
+                    driver.update_waker(&mut key, cx.waker().clone());
+                    drop(driver);
+                    self.state.replace(OpOrKey::Key(key));
+                    Poll::Pending
+                }
+                PushEntry::Ready(result) => Poll::Ready(result),
+            }
+        })
+    }
+}
 
 pub struct Runtime {
     #[allow(unused)]
@@ -72,6 +114,17 @@ impl Runtime {
 
     pub fn timer_cancelled_count(&self) -> Arc<AtomicUsize> {
         self.timer_cancelled_count.clone()
+    }
+
+    #[allow(unused)]
+    pub async fn execute<T>(&self, op: T) -> BufResult<usize, T>
+    where
+        T: OpCode + 'static,
+    {
+        OpFuture {
+            state: Some(OpOrKey::Op(op)),
+        }
+        .await
     }
 
     #[inline(always)]
@@ -169,11 +222,13 @@ impl Runtime {
                 .and_then(|pyloop| pyloop.getattr("call_exception_handler"))
                 .map(|pyloop| pyloop.unbind())
         })?;
-        loop {
-            self.run_once(&call_exception_handler)?;
-            if self.stopping.load(atomic::Ordering::SeqCst) {
-                break Ok(());
+        CURRENT_RUNTIME.set(self, || {
+            loop {
+                self.run_once(&call_exception_handler)?;
+                if self.stopping.load(atomic::Ordering::SeqCst) {
+                    break Ok(());
+                }
             }
-        }
+        })
     }
 }

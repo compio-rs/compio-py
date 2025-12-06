@@ -35,7 +35,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "compio"
 version = "0.17.0"
-source = "git+https://github.com/compio-rs/compio.git#63f5a38221403c7ba7a196724041546291b7049a"
+source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -44,16 +44,16 @@ dependencies = [
 
 [[package]]
 name = "compio-buf"
-version = "0.7.0"
-source = "git+https://github.com/compio-rs/compio.git#63f5a38221403c7ba7a196724041546291b7049a"
+version = "0.7.1"
+source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "compio-driver"
-version = "0.9.3"
-source = "git+https://github.com/compio-rs/compio.git#63f5a38221403c7ba7a196724041546291b7049a"
+version = "0.10.0"
+source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
 dependencies = [
  "cfg-if",
  "cfg_aliases",
@@ -76,7 +76,7 @@ dependencies = [
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio.git#63f5a38221403c7ba7a196724041546291b7049a"
+source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
 dependencies = [
  "tracing",
 ]
@@ -88,6 +88,7 @@ dependencies = [
  "compio",
  "once_cell",
  "pyo3",
+ "scoped-tls",
 ]
 
 [[package]]
@@ -384,6 +385,12 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
 name = "scopeguard"
