@@ -9,7 +9,7 @@ use std::{
         atomic::{self, AtomicBool, AtomicUsize},
     },
 };
-
+use async_task::Task;
 use pyo3::{
     exceptions::{PyKeyboardInterrupt, PySystemExit},
     prelude::*,
@@ -18,7 +18,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-struct Shared {
+pub struct Shared {
     callback: Py<PyAny>,
     args: Py<PyTuple>,
     context: Py<PyAny>,
@@ -27,12 +27,57 @@ struct Shared {
 
 impl Shared {
     #[inline]
-    fn new(callback: Py<PyAny>, args: Py<PyTuple>, context: Py<PyAny>) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(
+        py: Python,
+        callback: Py<PyAny>,
+        args: Py<PyTuple>,
+        context: Option<Py<PyAny>>,
+    ) -> PyResult<Arc<Self>> {
+        // If no context is provided, copy the current context
+        let context = match context {
+            Some(ctx) => ctx,
+            None => crate::import::copy_context(py)?.unbind(),
+        };
+        Ok(Arc::new(Self {
             callback,
             args,
             context,
             cancelled: AtomicBool::new(false),
+        }))
+    }
+
+    #[inline]
+    pub fn run(&self) {
+        Python::attach(|py| {
+            // Build argument list: [callback, arg1, arg2, ...]
+            let args = iter::once(self.callback.bind(py).clone())
+                .chain(self.args.bind(py).iter())
+                .collect::<Vec<_>>();
+
+            // Equivalent to: self.context.run(callback, *args)
+            let rv = self
+                .context
+                .bind(py)
+                .getattr("run")
+                .and_then(|run| run.call1(PyTuple::new(py, args)?));
+
+            // Handle exceptions
+            match rv {
+                Ok(_) => Ok(()),
+
+                // Reraise SystemExit and KeyboardInterrupt
+                Err(e) if e.is_instance_of::<PySystemExit>(py) => Err(e),
+                Err(e) if e.is_instance_of::<PyKeyboardInterrupt>(py) => Err(e),
+
+                // Call the loop's exception handler for other exceptions
+                Err(e) => {
+                    let context = PyDict::new(py);
+                    context.set_item("message", "Exception in callback")?;
+                    context.set_item("exception", e)?;
+                    context.set_item("handle", self.as_py_any(py)?)?;
+                    call_exception_handler.bind(py).call1((context,)).map(drop)
+                }
+            }
         })
     }
 
@@ -56,6 +101,7 @@ impl Shared {
 
 pub struct Handle {
     shared: Arc<Shared>,
+
     pyhandle: PyOnceLock<Py<PyAny>>,
 }
 
@@ -202,7 +248,13 @@ impl Ord for TimerHandle {
 }
 
 #[pyclass(name = "Handle", subclass, weakref)]
-struct PyHandle(Arc<Shared>);
+struct PyHandle {
+    callback: Py<PyAny>,
+    args: Py<PyTuple>,
+    context: Py<PyAny>,
+    task: Task<()>,
+    cancelled: AtomicBool,
+}
 
 #[pymethods]
 impl PyHandle {

@@ -14,6 +14,8 @@
 //!  * https://github.com/compio-rs/compio/blob/master/compio-runtime/src/runtime/send_wrapper.rs
 //!  * https://github.com/thk1/send_wrapper
 
+use pyo3::PyErr;
+use pyo3::exceptions::PyRuntimeError;
 use std::{
     cell::{Cell, UnsafeCell},
     marker, mem,
@@ -29,6 +31,27 @@ type BorrowCounter = usize;
 
 /// Value indicating no active borrows exist.
 const UNUSED: BorrowCounter = 0;
+
+#[derive(Debug)]
+pub enum Error {
+    OwnedByOther(u32),
+    AlreadyInitialized,
+}
+
+impl From<Error> for PyErr {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::OwnedByOther(_) => PyErr::new::<PyRuntimeError, _>(
+                "Concurrent access detected: OwnedRefCell is owned by another thread",
+            ),
+            Error::AlreadyInitialized => {
+                PyErr::new::<PyRuntimeError, _>("OwnedRefCell is already initialized")
+            }
+        }
+    }
+}
+
+type OwnedResult<T> = Result<T, Error>;
 
 /// A thread-safe cell with single-owner access control.
 ///
@@ -121,7 +144,7 @@ impl<T> OwnedRefCell<T> {
     /// let guard3 = cell.acquire(false); // Err: already owned
     /// ```
     #[inline]
-    pub fn acquire(&self, reentrant: bool) -> Result<OwnershipGuard<'_>, u32> {
+    pub fn acquire(&self, reentrant: bool) -> OwnedResult<OwnershipGuard<'_>> {
         OwnershipGuard::new(&self.owner, &self.borrow, reentrant)
     }
 
@@ -136,7 +159,7 @@ impl<T> OwnedRefCell<T> {
     /// - `Ok(None)` if the cell is empty but access was granted
     /// - `Err(thread_id)` if another thread owns the cell
     #[inline]
-    pub fn get(&self) -> Result<Option<Ref<'_, T>>, u64> {
+    pub fn get(&self) -> Result<Option<Ref<'_, T>>, Error> {
         let b = self.acquire(true)?;
         Ok(self.get_unchecked().map(|value| Ref { value, _borrow: b }))
     }
@@ -155,11 +178,19 @@ impl<T> OwnedRefCell<T> {
     /// - `Ok(())` if initialization succeeds
     /// - `Err(thread_id)` if another thread owns the cell
     #[inline]
-    pub fn init(&self, value: T) -> Result<(), u64> {
+    pub fn init(&self, value: T) -> OwnedResult<()> {
+        self.try_init(value).map_err(|e| match e {
+            Error::AlreadyInitialized => panic!("Attempted to set twice"),
+            other => other,
+        })
+    }
+
+    #[inline]
+    pub fn try_init(&self, value: T) -> OwnedResult<()> {
         let _guard = self.acquire(true)?;
         let slot = unsafe { &mut *self.inner.get() };
         if slot.is_some() {
-            panic!("Attempted to set twice");
+            Err(Error::AlreadyInitialized)
         } else {
             slot.replace(value);
             Ok(())
@@ -263,7 +294,7 @@ impl<'a> OwnershipGuard<'a> {
         owner: &'a AtomicU32,
         borrow: &'a Cell<BorrowCounter>,
         reentrant: bool,
-    ) -> Result<OwnershipGuard<'a>, u32> {
+    ) -> OwnedResult<OwnershipGuard<'a>> {
         // Get the current thread's ID to claim ownership
         let new = crate::thread::get_current_thread_id().get();
 
@@ -297,7 +328,7 @@ impl<'a> OwnershipGuard<'a> {
             Ok(Self::new_unchecked(owner, borrow))
         } else {
             // Either reentrant=false, or a different thread owns it
-            Err(old)
+            Err(Error::OwnedByOther(old))
         }
     }
 

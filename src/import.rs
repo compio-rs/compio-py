@@ -119,7 +119,18 @@ macro_rules! getattr {
     }};
 }
 
+import!(asyncio);
 import!(contextvars);
+
+pub fn iscoroutine(py: Python, obj: &Bound<PyAny>) -> PyResult<bool> {
+    getattr!(py, asyncio, "iscoroutine")
+        .call1((obj,))?
+        .extract()
+}
+
+pub fn future_type(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    Ok(getattr!(py, asyncio, "Future"))
+}
 
 /// Returns a copy of the current Python context.
 ///

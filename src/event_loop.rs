@@ -1,21 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
 // Copyright 2025 Fantix King
 
-use std::sync::{
-    Arc,
-    atomic::{self, AtomicBool},
+use crate::future::PyFuture;
+use crate::{
+    handle,
+    handle::{Handle, TimerHandle},
+    owned::{self, OwnedRefCell},
+    runtime::{self, Runtime},
 };
-
+use compio::driver::op::Recv;
+use pyo3::buffer::PyBuffer;
+use pyo3::exceptions::PyValueError;
 use pyo3::{
+    IntoPyObjectExt,
     exceptions::PyRuntimeError,
     prelude::*,
     types::{PyTuple, PyWeakrefReference},
 };
-
-use crate::{
-    handle::{Handle, TimerHandle},
-    owned::{self, OwnedRefCell},
-    runtime::Runtime,
+use std::os::fd::{FromRawFd, OwnedFd};
+use std::sync::{
+    Arc,
+    atomic::{self, AtomicBool},
 };
 
 #[pyclass(subclass)]
@@ -70,7 +75,9 @@ impl CompioLoop {
         context: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = self.runtime()?;
-        let handle = Handle::new(py, callback, args, context)?;
+        let shared = handle::Shared::new(py, callback, args, context)?;
+        let x = runtime.spawner()(async { Python::attach(|py| {}) });
+        let handle = Handle::new(shared)?;
         let rv = handle.as_py_any(py)?;
         runtime.push_ready(handle);
         Ok(rv)
@@ -117,6 +124,7 @@ impl CompioLoop {
     }
 
     fn stop(&self) {
+        eprintln!("Stopping event loop");
         self.stopping.store(true, atomic::Ordering::SeqCst);
     }
 
@@ -131,11 +139,46 @@ impl CompioLoop {
         }
         Ok(())
     }
+
+    // Completion based I/O methods returning Futures.
+
+    fn sock_recv_into(slf: Py<Self>, sock: Py<PyAny>, buf: Py<PyAny>) -> PyResult<PyFuture> {
+        let coro = async {
+            let op = Python::attach(|py| {
+                let pybuf: PyBuffer<u8> = PyBuffer::get(buf.bind(py))?;
+                if pybuf.readonly() {
+                    return Err(PyErr::new::<PyValueError, _>(
+                        "buffer argument must be writable",
+                    ));
+                }
+                if !pybuf.is_c_contiguous() {
+                    return Err(PyErr::new::<PyValueError, _>(
+                        "buffer argument must be C-contiguous",
+                    ));
+                }
+                let ptr = pybuf.buf_ptr() as *mut u8;
+                let len = pybuf.len_bytes();
+                let buf = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+
+                let fd = sock.bind(py).call_method0("fileno")?.extract::<i32>()?;
+                let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+                Ok(Recv::new(fd, buf))
+            })?;
+            let nbytes = runtime::execute(op).await.0?;
+
+            // make sure sock and buf are captured and not dropped too early
+            drop(sock);
+            drop(buf);
+
+            Python::attach(|py| nbytes.into_py_any(py))
+        };
+        Ok(PyFuture::from_future(coro, slf))
+    }
 }
 
 impl CompioLoop {
     #[inline]
-    fn runtime(&self) -> PyResult<owned::Ref<'_, Runtime>> {
+    pub fn runtime(&self) -> PyResult<owned::Ref<'_, Runtime>> {
         match self.runtime.get() {
             Ok(Some(rv)) => Ok(rv),
             Ok(None) => Err(PyErr::new::<PyRuntimeError, _>("CompioLoop is closed")),

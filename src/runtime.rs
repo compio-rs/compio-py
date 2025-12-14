@@ -14,13 +14,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_task::{Runnable, Task};
 use compio::{
     BufResult,
     driver::{DriverType, Key, OpCode, Proactor, PushEntry},
 };
 use pyo3::{prelude::*, types::PyWeakrefReference};
 
-use crate::handle::{Handle, TimerHandle};
+use crate::{
+    handle::{Handle, TimerHandle},
+    send_wrapper::SendWrapper,
+};
 
 /// Minimum number of _scheduled timer handles before cleanup of
 /// cancelled handles is performed.
@@ -77,6 +81,7 @@ pub struct Runtime {
     stopping: Arc<AtomicBool>,
     driver: RefCell<Proactor>,
     ready: RefCell<VecDeque<Handle>>,
+    ready2: Arc<SendWrapper<RefCell<VecDeque<Runnable>>>>,
     scheduled: RefCell<BinaryHeap<TimerHandle>>,
     timer_cancelled_count: Arc<AtomicUsize>,
 }
@@ -89,6 +94,7 @@ impl Runtime {
             stopping,
             driver: RefCell::new(Proactor::new()?),
             ready: RefCell::new(VecDeque::new()),
+            ready2: Arc::new(SendWrapper::new(RefCell::new(VecDeque::new()))),
             scheduled: RefCell::new(BinaryHeap::new()),
             timer_cancelled_count: Arc::new(AtomicUsize::new(0)),
         })
@@ -99,7 +105,39 @@ impl Runtime {
     }
 
     #[inline]
+    pub fn spawner<F>(&self) -> impl FnOnce(F) -> Task<F::Output> + use<F>
+    where
+        F: Future,
+    {
+        let ready_queue = self.ready2.clone();
+        let schedule = move |runnable| {
+            ready_queue
+                .get()
+                .expect("same thread")
+                .borrow_mut()
+                .push_back(runnable);
+        };
+        move |fut| {
+            let (runnable, task) = unsafe { async_task::spawn_unchecked(fut, schedule) };
+            runnable.schedule();
+            task
+        }
+    }
+
+    #[inline]
     pub fn push_ready(&self, handle: Handle) {
+        let call_exception_handler = || {
+            Python::attach(|py| {
+                self.pyloop
+                    .bind(py)
+                    .upgrade()
+                    .ok_or_else(|| {
+                        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Event loop is closed")
+                    })
+                    .and_then(|pyloop| pyloop.getattr("call_exception_handler"))
+                    .map(|pyloop| pyloop.unbind())
+            })
+        };
         self.ready.borrow_mut().push_back(handle);
     }
 
@@ -114,17 +152,6 @@ impl Runtime {
 
     pub fn timer_cancelled_count(&self) -> Arc<AtomicUsize> {
         self.timer_cancelled_count.clone()
-    }
-
-    #[allow(unused)]
-    pub async fn execute<T>(&self, op: T) -> BufResult<usize, T>
-    where
-        T: OpCode + 'static,
-    {
-        OpFuture {
-            state: Some(OpOrKey::Op(op)),
-        }
-        .await
     }
 
     #[inline(always)]
@@ -160,18 +187,22 @@ impl Runtime {
             }
         }
 
-        let timeout =
-            if !self.ready.borrow().is_empty() || self.stopping.load(atomic::Ordering::Acquire) {
-                Some(Duration::default())
-            } else if let Some(next_scheduled) = self.scheduled.borrow().peek() {
-                Some(
-                    Duration::from_secs_f64(next_scheduled.when())
-                        .saturating_sub(self.since_epoch())
-                        .min(MAXIMUM_SELECT_TIMEOUT),
-                )
-            } else {
-                None
-            };
+        let ready2 = self.ready2.get().expect("same thread");
+        let timeout = if !self.ready.borrow().is_empty()
+            || !ready2.borrow().is_empty()
+            || self.stopping.load(atomic::Ordering::Acquire)
+        {
+            Some(Duration::default())
+        } else if let Some(next_scheduled) = self.scheduled.borrow().peek() {
+            Some(
+                Duration::from_secs_f64(next_scheduled.when())
+                    .saturating_sub(self.since_epoch())
+                    .min(MAXIMUM_SELECT_TIMEOUT),
+            )
+        } else {
+            None
+        };
+        eprintln!("Polling I/O with timeout {:?}", timeout);
         self.driver
             .borrow_mut()
             .poll(timeout)
@@ -202,12 +233,21 @@ impl Runtime {
         // they will be run the next time (after another I/O poll).
         // Use an idiom that is thread-safe without using locks.
         let ntodo = self.ready.borrow().len();
+        eprintln!("Ready handles to run: {}", ntodo);
         for _ in 0..ntodo {
             let handle = self.ready.borrow_mut().pop_front().expect("not empty");
             if !handle.cancelled() {
                 handle.run(call_exception_handler)?;
             }
         }
+
+        let ntodo = ready2.borrow().len();
+        eprintln!("Ready2 handles to run: {}", ntodo);
+        for _ in 0..ntodo {
+            let runnable = ready2.borrow_mut().pop_front().expect("not empty");
+            runnable.run();
+        }
+
         Ok(())
     }
 
@@ -224,11 +264,41 @@ impl Runtime {
         })?;
         CURRENT_RUNTIME.set(self, || {
             loop {
+                eprintln!("Before run_once");
                 self.run_once(&call_exception_handler)?;
+                eprintln!("After run_once");
                 if self.stopping.load(atomic::Ordering::SeqCst) {
+                    eprintln!("Runtime loop stopped");
                     break Ok(());
                 }
             }
         })
+    }
+}
+
+pub async fn execute<T>(op: T) -> BufResult<usize, T>
+where
+    T: OpCode + 'static,
+{
+    OpFuture {
+        state: Some(OpOrKey::Op(op)),
+    }
+    .await
+}
+
+#[derive(Default)]
+pub struct Yield(bool);
+
+impl Future for Yield {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.0 {
+            Poll::Ready(())
+        } else {
+            self.get_mut().0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
     }
 }
