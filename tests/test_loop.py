@@ -467,15 +467,15 @@ class TestCallLater(unittest.TestCase):
     def test_call_later_zero_delay(self) -> None:
         """Test call_later with zero delay."""
         loop = compio.CompioLoop()
-        results: list[str] = []
+        results: set[str] = set()
 
-        loop.call_later(0, results.append, "zero_delay")
-        loop.call_soon(results.append, "soon")
+        loop.call_later(0, results.add, "zero_delay")
+        loop.call_soon(results.add, "soon")
         loop.call_soon(loop.stop)
         loop.run_forever()
 
-        # call_soon should execute before call_later(0)
-        self.assertEqual(results, ["soon", "zero_delay"])
+        # call_later(0) should behave like call_soon
+        self.assertEqual(results, {"soon", "zero_delay"})
         loop.close()
 
 

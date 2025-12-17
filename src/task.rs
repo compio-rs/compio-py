@@ -85,7 +85,7 @@ impl Coroutine {
             Ok(rv) => rv,
             Err(fut) => wait_future(fut)
                 .await
-                .map(|result| {
+                .map(|_result| {
                     // Python::attach(|py| pytask.bind(py).as_super().borrow_mut().set_result(result));
                     Err(None)
                 })

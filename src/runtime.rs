@@ -3,6 +3,7 @@
 
 use std::{
     cell::RefCell,
+    cmp,
     collections::{BinaryHeap, VecDeque},
     io,
     pin::Pin,
@@ -10,6 +11,7 @@ use std::{
         Arc,
         atomic::{self, AtomicBool, AtomicUsize},
     },
+    task::Waker,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -19,12 +21,9 @@ use compio::{
     BufResult,
     driver::{DriverType, Key, OpCode, Proactor, PushEntry},
 };
-use pyo3::{prelude::*, types::PyWeakrefReference};
+use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict, types::PyWeakrefReference};
 
-use crate::{
-    handle::{Handle, TimerHandle},
-    send_wrapper::SendWrapper,
-};
+use crate::send_wrapper::SendWrapper;
 
 /// Minimum number of _scheduled timer handles before cleanup of
 /// cancelled handles is performed.
@@ -74,15 +73,139 @@ impl<T: OpCode + 'static> Future for OpFuture<T> {
     }
 }
 
+#[derive(Default)]
+pub struct Yield(bool);
+
+impl Future for Yield {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.0 {
+            Poll::Ready(())
+        } else {
+            self.get_mut().0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+struct TimerKey {
+    when: Instant,
+    waker: Waker,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl TimerKey {
+    #[inline]
+    fn cancelled(&self) -> bool {
+        self.cancelled.load(atomic::Ordering::Acquire)
+    }
+}
+
+impl PartialEq for TimerKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.when == other.when
+    }
+}
+
+impl Eq for TimerKey {}
+
+impl PartialOrd for TimerKey {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TimerKey {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        // Reverse order to turn BinaryHeap into a min-heap (smallest `when` first)
+        other
+            .when
+            .partial_cmp(&self.when)
+            .unwrap_or(cmp::Ordering::Equal)
+    }
+}
+
+pub struct Timer {
+    when: f64,
+    scheduled: bool,
+    cancelled: Arc<AtomicBool>,
+    timer_cancelled_count: Arc<AtomicUsize>,
+}
+
+impl Timer {
+    fn new(when: f64, timer_cancelled_count: Arc<AtomicUsize>) -> Self {
+        Timer {
+            when,
+            scheduled: false,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            timer_cancelled_count,
+        }
+    }
+
+    #[inline]
+    pub fn when(&self) -> f64 {
+        self.when
+    }
+}
+
+impl Future for Timer {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.scheduled {
+            Poll::Ready(())
+        } else {
+            CURRENT_RUNTIME.with(|runtime| {
+                let when = runtime.epoch
+                    + Duration::try_from_secs_f64(self.when).unwrap_or_default();
+                if when < Runtime::end_time() {
+                    Poll::Ready(())
+                } else {
+                    runtime.scheduled.borrow_mut().push(TimerKey {
+                        when,
+                        waker: cx.waker().clone(),
+                        cancelled: self.cancelled.clone(),
+                    });
+                    println!("Timer scheduled for {:?}", when);
+                    self.get_mut().scheduled = true;
+                    Poll::Pending
+                }
+            })
+        }
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        println!("Timer cancelled");
+        if self
+            .cancelled
+            .compare_exchange(
+                false,
+                true,
+                atomic::Ordering::AcqRel,
+                atomic::Ordering::Acquire,
+            )
+            .is_ok()
+            && self.scheduled
+        {
+            println!("Timer cancelled counted");
+            self.timer_cancelled_count
+                .fetch_add(1, atomic::Ordering::Release);
+        }
+    }
+}
+
 pub struct Runtime {
-    #[allow(unused)]
     pyloop: Py<PyWeakrefReference>,
     epoch: Instant,
     stopping: Arc<AtomicBool>,
     driver: RefCell<Proactor>,
-    ready: RefCell<VecDeque<Handle>>,
-    ready2: Arc<SendWrapper<RefCell<VecDeque<Runnable>>>>,
-    scheduled: RefCell<BinaryHeap<TimerHandle>>,
+    ready: Arc<SendWrapper<RefCell<VecDeque<Runnable>>>>,
+    scheduled: RefCell<BinaryHeap<TimerKey>>,
+    fatal_error: RefCell<Option<PyErr>>,
     timer_cancelled_count: Arc<AtomicUsize>,
 }
 
@@ -93,9 +216,9 @@ impl Runtime {
             epoch: Instant::now(),
             stopping,
             driver: RefCell::new(Proactor::new()?),
-            ready: RefCell::new(VecDeque::new()),
-            ready2: Arc::new(SendWrapper::new(RefCell::new(VecDeque::new()))),
+            ready: Arc::new(SendWrapper::new(RefCell::new(VecDeque::new()))),
             scheduled: RefCell::new(BinaryHeap::new()),
+            fatal_error: RefCell::new(None),
             timer_cancelled_count: Arc::new(AtomicUsize::new(0)),
         })
     }
@@ -104,12 +227,11 @@ impl Runtime {
         self.driver.borrow().driver_type()
     }
 
-    #[inline]
     pub fn spawner<F>(&self) -> impl FnOnce(F) -> Task<F::Output> + use<F>
     where
         F: Future,
     {
-        let ready_queue = self.ready2.clone();
+        let ready_queue = self.ready.clone();
         let schedule = move |runnable| {
             ready_queue
                 .get()
@@ -125,37 +247,16 @@ impl Runtime {
     }
 
     #[inline]
-    pub fn push_ready(&self, handle: Handle) {
-        let call_exception_handler = || {
-            Python::attach(|py| {
-                self.pyloop
-                    .bind(py)
-                    .upgrade()
-                    .ok_or_else(|| {
-                        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Event loop is closed")
-                    })
-                    .and_then(|pyloop| pyloop.getattr("call_exception_handler"))
-                    .map(|pyloop| pyloop.unbind())
-            })
-        };
-        self.ready.borrow_mut().push_back(handle);
-    }
-
-    #[inline]
-    pub fn push_scheduled(&self, handle: TimerHandle) {
-        self.scheduled.borrow_mut().push(handle);
-    }
-
     pub fn since_epoch(&self) -> Duration {
         Instant::now().duration_since(self.epoch)
     }
 
-    pub fn timer_cancelled_count(&self) -> Arc<AtomicUsize> {
-        self.timer_cancelled_count.clone()
+    pub fn timer(&self, when: f64) -> Timer {
+        Timer::new(when, self.timer_cancelled_count.clone())
     }
 
     #[inline(always)]
-    fn run_once(&self, call_exception_handler: &Py<PyAny>) -> PyResult<()> {
+    fn run_once(&self) -> PyResult<()> {
         let sched_count = self.scheduled.borrow().len();
         if sched_count > MIN_SCHEDULED_TIMER_HANDLES
             && self.timer_cancelled_count.load(atomic::Ordering::Acquire) as f64
@@ -165,9 +266,9 @@ impl Runtime {
             // Remove delayed calls that were cancelled if their number
             // is too high
             let mut new_scheduled = Vec::new();
-            for handle in self.scheduled.take() {
-                if !handle.cancelled() {
-                    new_scheduled.push(handle);
+            for key in self.scheduled.take() {
+                if !key.cancelled() {
+                    new_scheduled.push(key);
                 }
             }
             self.scheduled.replace(BinaryHeap::from(new_scheduled));
@@ -179,7 +280,7 @@ impl Runtime {
             while let Some(next_scheduled) = scheduled.peek() {
                 if next_scheduled.cancelled() {
                     self.timer_cancelled_count
-                        .fetch_sub(1, atomic::Ordering::AcqRel);
+                        .fetch_sub(1, atomic::Ordering::Release);
                     scheduled.pop();
                 } else {
                     break;
@@ -187,16 +288,15 @@ impl Runtime {
             }
         }
 
-        let ready2 = self.ready2.get().expect("same thread");
-        let timeout = if !self.ready.borrow().is_empty()
-            || !ready2.borrow().is_empty()
-            || self.stopping.load(atomic::Ordering::Acquire)
+        let ready = self.ready.get().expect("same thread");
+        let timeout = if !ready.borrow().is_empty() || self.stopping.load(atomic::Ordering::Acquire)
         {
             Some(Duration::default())
         } else if let Some(next_scheduled) = self.scheduled.borrow().peek() {
             Some(
-                Duration::from_secs_f64(next_scheduled.when())
-                    .saturating_sub(self.since_epoch())
+                next_scheduled
+                    .when
+                    .saturating_duration_since(Instant::now())
                     .min(MAXIMUM_SELECT_TIMEOUT),
             )
         } else {
@@ -213,15 +313,15 @@ impl Runtime {
 
         // Handle 'later' callbacks that are ready.
         {
-            let end_time = (self.since_epoch() + Duration::from_micros(1)).as_secs_f64();
+            let end_time = Self::end_time();
             let mut scheduled = self.scheduled.borrow_mut();
-            let mut ready = self.ready.borrow_mut();
-            while let Some(next_scheduled) = scheduled.peek() {
-                if next_scheduled.when() < end_time {
-                    let next_scheduled = scheduled.pop().expect("not empty");
-                    ready.push_back(next_scheduled.into_base());
-                } else {
-                    break;
+            loop {
+                match scheduled.peek() {
+                    Some(TimerKey { when, .. }) if when < &end_time => {
+                        let TimerKey { waker, .. } = scheduled.pop().expect("not empty");
+                        waker.wake();
+                    }
+                    _ => break,
                 }
             }
         }
@@ -232,40 +332,36 @@ impl Runtime {
         // callbacks scheduled by callbacks run this time around --
         // they will be run the next time (after another I/O poll).
         // Use an idiom that is thread-safe without using locks.
-        let ntodo = self.ready.borrow().len();
+        let ntodo = ready.borrow().len();
         eprintln!("Ready handles to run: {}", ntodo);
         for _ in 0..ntodo {
-            let handle = self.ready.borrow_mut().pop_front().expect("not empty");
-            if !handle.cancelled() {
-                handle.run(call_exception_handler)?;
-            }
-        }
-
-        let ntodo = ready2.borrow().len();
-        eprintln!("Ready2 handles to run: {}", ntodo);
-        for _ in 0..ntodo {
-            let runnable = ready2.borrow_mut().pop_front().expect("not empty");
+            let runnable = ready.borrow_mut().pop_front().expect("not empty");
             runnable.run();
+            if let Some(err) = self.fatal_error.take() {
+                return Err(err);
+            }
         }
 
         Ok(())
     }
 
+    #[inline]
+    fn end_time() -> Instant {
+        Instant::now()
+            + if cfg!(any(target_os = "linux", target_os = "macos")) {
+                Duration::from_nanos(1)
+            } else if cfg!(target_os = "windows") {
+                Duration::from_nanos(100)
+            } else {
+                Duration::from_nanos(1000)
+            }
+    }
+
     pub fn run(&self) -> PyResult<()> {
-        let call_exception_handler = Python::attach(|py| {
-            self.pyloop
-                .bind(py)
-                .upgrade()
-                .ok_or_else(|| {
-                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Event loop is closed")
-                })
-                .and_then(|pyloop| pyloop.getattr("call_exception_handler"))
-                .map(|pyloop| pyloop.unbind())
-        })?;
         CURRENT_RUNTIME.set(self, || {
             loop {
                 eprintln!("Before run_once");
-                self.run_once(&call_exception_handler)?;
+                self.run_once()?;
                 eprintln!("After run_once");
                 if self.stopping.load(atomic::Ordering::SeqCst) {
                     eprintln!("Runtime loop stopped");
@@ -273,6 +369,17 @@ impl Runtime {
                 }
             }
         })
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        println!("Dropping runtime");
+        for key in self.scheduled.take() {
+            key.waker.wake();
+            println!("Drop TimerKey");
+        }
+        self.ready.get().expect("same thread").take();
     }
 }
 
@@ -286,19 +393,24 @@ where
     .await
 }
 
-#[derive(Default)]
-pub struct Yield(bool);
+pub fn call_exception_handler(py: Python, context: Bound<PyDict>) -> PyResult<()> {
+    CURRENT_RUNTIME.with(|runtime| {
+        runtime
+            .pyloop
+            .bind(py)
+            .upgrade()
+            .ok_or_else(|| PyRuntimeError::new_err("Event loop is closed"))?
+            .getattr("call_exception_handler")?
+            .call1((context,))
+            .map(drop)
+    })
+}
 
-impl Future for Yield {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.0 {
-            Poll::Ready(())
-        } else {
-            self.get_mut().0 = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
+pub fn fatal_error(err: PyErr) {
+    CURRENT_RUNTIME.with(|runtime| {
+        let mut fatal_error = runtime.fatal_error.borrow_mut();
+        if fatal_error.is_none() {
+            *fatal_error = Some(err);
         }
-    }
+    });
 }

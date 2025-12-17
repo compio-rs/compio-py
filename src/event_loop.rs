@@ -1,26 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
 // Copyright 2025 Fantix King
 
-use crate::future::PyFuture;
-use crate::{
-    handle,
-    handle::{Handle, TimerHandle},
-    owned::{self, OwnedRefCell},
-    runtime::{self, Runtime},
+use std::{
+    os::fd::{FromRawFd, OwnedFd},
+    sync::{
+        Arc,
+        atomic::{self, AtomicBool},
+    },
 };
+
 use compio::driver::op::Recv;
-use pyo3::buffer::PyBuffer;
-use pyo3::exceptions::PyValueError;
 use pyo3::{
     IntoPyObjectExt,
+    buffer::PyBuffer,
     exceptions::PyRuntimeError,
+    exceptions::PyValueError,
     prelude::*,
     types::{PyTuple, PyWeakrefReference},
 };
-use std::os::fd::{FromRawFd, OwnedFd};
-use std::sync::{
-    Arc,
-    atomic::{self, AtomicBool},
+
+use crate::{
+    future::PyFuture,
+    handle::{Handle, TimerHandle},
+    owned::{self, OwnedRefCell},
+    runtime::{self, Runtime},
 };
 
 #[pyclass(subclass)]
@@ -73,14 +76,9 @@ impl CompioLoop {
         callback: Py<PyAny>,
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<Bound<'py, Handle>> {
         let runtime = self.runtime()?;
-        let shared = handle::Shared::new(py, callback, args, context)?;
-        let x = runtime.spawner()(async { Python::attach(|py| {}) });
-        let handle = Handle::new(shared)?;
-        let rv = handle.as_py_any(py)?;
-        runtime.push_ready(handle);
-        Ok(rv)
+        Handle::new(py, callback, args, context)?.schedule_soon(&runtime, py)
     }
 
     #[pyo3(signature = (when, callback, *args, context=None))]
@@ -91,8 +89,9 @@ impl CompioLoop {
         callback: Py<PyAny>,
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        self.call_at_impl(self.runtime()?, py, when, callback, args, context)
+    ) -> PyResult<Bound<'py, TimerHandle>> {
+        let runtime = self.runtime()?;
+        Handle::new(py, callback, args, context)?.schedule_at(&runtime, py, when)
     }
 
     #[pyo3(signature = (delay, callback, *args, context=None))]
@@ -103,10 +102,22 @@ impl CompioLoop {
         callback: Py<PyAny>,
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<Bound<'py, TimerHandle>> {
         let runtime = self.runtime()?;
         let when = runtime.since_epoch().as_secs_f64() + delay;
-        self.call_at_impl(runtime, py, when, callback, args, context)
+        Handle::new(py, callback, args, context)?.schedule_at(&runtime, py, when)
+    }
+
+    fn sleep(slf: Bound<Self>, delay: f64) -> PyResult<PyFuture> {
+        let this = slf.borrow();
+        let runtime = this.runtime()?;
+        let when = runtime.since_epoch().as_secs_f64() + delay;
+        let timer = runtime.timer(when);
+        let coro = async {
+            timer.await;
+            Ok(Python::attach(|py| py.None()))
+        };
+        Ok(PyFuture::from_future(coro, slf.unbind()))
     }
 
     fn time(&self) -> PyResult<f64> {
@@ -142,7 +153,7 @@ impl CompioLoop {
 
     // Completion based I/O methods returning Futures.
 
-    fn sock_recv_into(slf: Py<Self>, sock: Py<PyAny>, buf: Py<PyAny>) -> PyResult<PyFuture> {
+    fn sock_recv_into(slf: Py<Self>, sock: Py<PyAny>, buf: Py<PyAny>) -> PyFuture {
         let coro = async {
             let op = Python::attach(|py| {
                 let pybuf: PyBuffer<u8> = PyBuffer::get(buf.bind(py))?;
@@ -172,7 +183,7 @@ impl CompioLoop {
 
             Python::attach(|py| nbytes.into_py_any(py))
         };
-        Ok(PyFuture::from_future(coro, slf))
+        PyFuture::from_future(coro, slf)
     }
 }
 
@@ -186,22 +197,6 @@ impl CompioLoop {
                 "Non-thread-safe operation invoked on an event loop other than the current one",
             )),
         }
-    }
-
-    #[inline]
-    fn call_at_impl<'py>(
-        &self,
-        runtime: owned::Ref<Runtime>,
-        py: Python<'py>,
-        when: f64,
-        callback: Py<PyAny>,
-        args: Py<PyTuple>,
-        context: Option<Py<PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let handle = TimerHandle::new(py, callback, args, context, when)?;
-        let rv = handle.as_py_any(py, runtime.timer_cancelled_count())?;
-        runtime.push_scheduled(handle);
-        Ok(rv)
     }
 }
 

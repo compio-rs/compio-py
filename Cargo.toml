@@ -15,7 +15,6 @@ pyo3 = { version = "0.27.1", features = ["extension-module"] }
 once_cell = "1.21.3"
 scoped-tls = "1.0.1"
 async-task = { version = "4.7.1", default-features = false }
-either = "1.15.0"
 
 [dependencies.compio]
 git = "https://github.com/compio-rs/compio.git"
