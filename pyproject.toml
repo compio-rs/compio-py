@@ -1,7 +1,7 @@
 [project]
-name = "compio"
+name = "kLoop"
 version = "0.1.0"
-description = "Add your description here"
+description = "An asyncio event loop implementation powered by Rust's compio."
 readme = "README.md"
 authors = [
     { name = "Fantix King", email = "fantix.king@gmail.com" }
@@ -11,8 +11,11 @@ dependencies = []
 license = "Apache-2.0 OR MulanPSL-2.0"
 license-files = ["LICENSE.Apache-2.0", "LICENSE.MulanPSL-2.0"]
 
-[project.optional-dependencies]
-test = ["mypy>=1.0", "ruff>=0.1.0"]
+[dependency-groups]
+dev = [
+    "mypy>=1.19.0",
+    "ruff>=0.14.7",
+]
 
 [tool.maturin]
 module-name = "compio._core"
