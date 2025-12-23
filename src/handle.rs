@@ -50,7 +50,7 @@ impl Handle {
         let slf = rv.clone().unbind();
         rv.borrow_mut()
             .task
-            .replace(runtime.spawner()(async { Self::run(slf) }));
+            .replace(runtime.spawn(async { Self::run(slf) }));
         Ok(rv)
     }
 
@@ -61,13 +61,12 @@ impl Handle {
         when: f64,
     ) -> PyResult<Bound<'py, TimerHandle>> {
         let timer = runtime.timer(when);
-        let spawn = runtime.spawner();
         let slf = TimerHandle(when);
         let initializer = PyClassInitializer::from(self).add_subclass(slf);
         let rv = Bound::new(py, initializer)?;
         let base = rv.as_super();
         let handle = base.clone().unbind();
-        base.borrow_mut().task.replace(spawn(async {
+        base.borrow_mut().task.replace(runtime.spawn(async {
             timer.await;
             Self::run(handle);
         }));

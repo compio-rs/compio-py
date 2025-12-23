@@ -7,7 +7,7 @@ use pyo3::{exceptions::PyRuntimeError, exceptions::PyStopIteration, prelude::*, 
 
 use crate::{event_loop::CompioLoop, send_wrapper::SendWrapper};
 
-type PyAnyResult = Result<Py<PyAny>, Py<PyAny>>;
+type PyAnyResult = PyResult<Py<PyAny>>;
 
 trait CloneRefPy {
     fn clone_ref(&self, py: Python) -> Self;
@@ -25,6 +25,7 @@ impl CloneRefPy for PyAnyResult {
 #[pyclass(name = "Future", subclass)]
 pub struct PyFuture {
     fut: Option<SendWrapper<Pin<Box<dyn Future<Output = PyAnyResult>>>>>,
+    #[allow(unused)]
     pyloop: Py<CompioLoop>,
     result: Option<PyAnyResult>,
 }
@@ -45,15 +46,17 @@ impl PyFuture {
         self.result = Some(Ok(result));
     }
 
-    pub fn set_exception(&mut self, exc: Bound<PyAny>) -> PyResult<()> {
-        if exc.is_instance_of::<PyType>() {
-            self.result = Some(Err(exc.call0()?.unbind()))
+    pub fn set_exception(&mut self, py: Python, exc: Bound<PyAny>) -> PyResult<()> {
+        if let Ok(ty) = exc.clone().cast_into::<PyType>() {
+            self.result = Some(Err(PyErr::from_type(ty, ())));
         } else if exc.is_instance_of::<PyStopIteration>() {
-            return Err(PyErr::new::<PyRuntimeError, _>(
-                "Cannot set StopIteration as exception of Future",
-            ));
+            let e = PyRuntimeError::new_err("Cannot set StopIteration as exception of Future");
+            let v = e.value(py);
+            v.setattr("__cause__", exc.clone())?;
+            v.setattr("__context__", exc.clone())?;
+            self.result = Some(Err(e));
         } else {
-            self.result = Some(Err(exc.unbind()));
+            self.result = Some(Err(PyErr::from_value(exc)));
         }
         Ok(())
     }
@@ -61,88 +64,34 @@ impl PyFuture {
     fn __await__<'py>(slf: Py<Self>, py: Python<'py>) -> PyResult<Bound<'py, FutureAwaiter>> {
         Bound::new(py, FutureAwaiter(slf))
     }
-    fn __iter__<'py>(slf: Py<Self>, py: Python<'py>) -> PyResult<Bound<'py, FutureAwaiter>> {
-        Self::__await__(slf, py)
-    }
 }
 
 impl PyFuture {
     pub fn from_future<T>(fut: T, pyloop: Py<CompioLoop>) -> Self
     where
-        T: Future<Output = PyResult<Py<PyAny>>> + 'static,
+        T: Future<Output = PyAnyResult> + 'static,
     {
-        let fut = async {
-            match fut.await {
-                Ok(result) => Ok(result),
-                Err(err) => Err(Python::attach(|py| err.into_value(py).into_any())),
-            }
-        };
         Self {
             fut: Some(SendWrapper::new(Box::pin(fut))),
             pyloop,
             result: None,
         }
     }
+}
 
-    // pub fn poll(&mut self, cx: &mut Context) -> Poll<PyAnyResult> {
-    //     if let Some(rv) = &self.result {
-    //         Poll::Ready(Python::attach(|py| rv.clone_ref(py)))
-    //     } else if let Some(fut) = self.fut.as_mut() {
-    //         match fut
-    //             .get_mut()
-    //             .ok_or_else(|| {
-    //                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-    //                     "Future polled from a different thread",
-    //                 )
-    //             })?
-    //             .as_mut()
-    //             .poll(cx)
-    //         {
-    //             Poll::Ready(result) => {
-    //                 Python::attach(|py| {
-    //                     self.result = Some(result.clone_ref(py));
-    //                 });
-    //                 Poll::Ready(result)
-    //             }
-    //             Poll::Pending => Poll::Pending,
-    //         }
-    //     } else {
-    //         Poll::Pending
-    //     }
-    // }
+#[pyclass]
+struct FutureAwaiter(Py<PyFuture>);
 
-    pub fn pyloop(&self) -> &Py<CompioLoop> {
-        &self.pyloop
+#[pymethods]
+impl FutureAwaiter {
+    fn __next__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyFuture>> {
+        let fut = self.0.bind(py);
+        match &fut.borrow().result {
+            Some(Ok(result)) => Err(PyErr::new::<PyStopIteration, _>(result.clone_ref(py))),
+            Some(Err(e)) => Err(e.clone_ref(py)),
+            None => Ok(fut.clone()),
+        }
     }
-
-    // pub fn take_fut(slf: Py<Self>) -> PyResult<impl Future<Output = PyAnyResult> + use<>> {
-    //     Python::attach(|py| {
-    //         let mut this = slf.borrow_mut(py);
-    //         if let Some(rv) = &this.result {
-    //             let rv = rv.clone_ref(py);
-    //             Ok(Either::Left(async { rv }))
-    //         } else if let Some(fut) = this
-    //             .fut
-    //             .get_mut()
-    //             .ok_or_else(|| {
-    //                 PyErr::new::<PyRuntimeError, _>("Future polled from a different thread")
-    //             })?
-    //             .take()
-    //         {
-    //             let slf = slf.clone_ref(py);
-    //             Ok(Either::Right(Either::Left(async move {
-    //                 let result = fut.await;
-    //                 Python::attach(|py| {
-    //                     slf.borrow_mut(py).result = Some(result.clone_ref(py));
-    //                 });
-    //                 result
-    //             })))
-    //         } else {
-    //             let e = PyErr::new::<PyNotImplemented, _>("driven by add_done_callback");
-    //             Ok(Either::Right(Either::Right(async { Err(e) })))
-    //         }
-    //     })
-    // }
 }
 
 struct PyFutureFuture(Py<PyFuture>);
@@ -160,7 +109,6 @@ impl Future for PyFutureFuture {
                     .get_mut()
                     .ok_or_else(|| {
                         PyRuntimeError::new_err("Future polled from a different thread")
-                            .into_value(py)
                     })?
                     .as_mut()
                     .poll(cx)
@@ -177,21 +125,6 @@ impl Future for PyFutureFuture {
                 Poll::Pending
             }
         })
-    }
-}
-
-#[pyclass]
-struct FutureAwaiter(Py<PyFuture>);
-
-#[pymethods]
-impl FutureAwaiter {
-    fn __next__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyFuture>> {
-        let fut = self.0.bind(py);
-        match &fut.borrow().result {
-            Some(Ok(result)) => Err(PyErr::new::<PyStopIteration, _>(result.clone_ref(py))),
-            Some(Err(e)) => Err(PyErr::from_value(e.bind(py).clone()))?,
-            None => Ok(fut.clone()),
-        }
     }
 }
 

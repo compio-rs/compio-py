@@ -13,6 +13,8 @@ use crate::{
     owned::OwnedRefCell,
 };
 
+type StepResult = Option<PyResult<Py<PyAny>>>;
+
 struct Coroutine {
     #[allow(unused)]
     coro: Py<PyAny>,
@@ -44,22 +46,22 @@ impl Coroutine {
         loop {
             eprintln!("Task step");
             match self.step(&pytask, exc.take()).await? {
-                Ok(result) => {
+                Some(Ok(result)) => {
                     eprintln!("Task finished");
                     break Ok(result);
                 }
-                Err(None) => {
-                    eprintln!("Task continue");
-                }
-                Err(Some(e)) => {
+                Some(Err(e)) => {
                     eprintln!("Task exception");
                     exc = Some(e)
+                }
+                None => {
+                    eprintln!("Task continue");
                 }
             }
         }
     }
 
-    async fn step(&self, pytask: &Py<PyTask>, exc: Option<Py<PyAny>>) -> PyResult<StepResult> {
+    async fn step(&self, pytask: &Py<PyTask>, exc: Option<PyErr>) -> PyResult<StepResult> {
         let partial: Result<_, Py<PyFuture>> = Python::attach(|py| {
             // Send or throw into the coroutine
             let result = if let Some(exc) = exc {
@@ -74,6 +76,7 @@ impl Coroutine {
             };
             eprintln!("Coroutine step result: {:?}", result);
             match result {
+                // If fut is a PyFuture, return Err<Py<PyFuture>> to indicate we need to wait
                 Ok(fut) => match fut.cast_into_exact() {
                     Ok(fut) => Err(fut.unbind()),
                     Err(e) => Ok(self.step_python_obj(pytask, py, e.into_inner())),
@@ -87,9 +90,9 @@ impl Coroutine {
                 .await
                 .map(|_result| {
                     // Python::attach(|py| pytask.bind(py).as_super().borrow_mut().set_result(result));
-                    Err(None)
+                    None
                 })
-                .or_else(|e| Ok(Err(Some(e)))),
+                .or_else(|e| Ok(Some(Err(e)))),
         }
     }
 
@@ -103,7 +106,7 @@ impl Coroutine {
         if result.is_instance_of::<PyFuture>() || result.is_instance(import::future_type(py)?)? {
             // result.call_method1("add_done_callback", (&self.wakeup, slf))?;
         }
-        Ok(Err(None))
+        Ok(None)
     }
 
     #[inline]
@@ -120,7 +123,7 @@ impl Coroutine {
                 .as_super()
                 .borrow_mut()
                 .set_result(value.clone_ref(py));
-            Ok(Ok(value))
+            Ok(Some(Ok(value)))
         } else if err.is_instance_of::<PyKeyboardInterrupt>(py)
             || err.is_instance_of::<PySystemExit>(py)
         {
@@ -129,15 +132,13 @@ impl Coroutine {
                 .bind(py)
                 .as_super()
                 .borrow_mut()
-                .set_exception(value)?;
+                .set_exception(py, value)?;
             Err(err)
         } else {
-            Ok(Err(Some(err.into_value(py).into_any())))
+            Ok(Some(Err(err)))
         }
     }
 }
-
-type StepResult = Result<Py<PyAny>, Option<Py<PyAny>>>;
 
 #[pyclass(name = "Task", extends=PyFuture, weakref)]
 pub struct PyTask {
@@ -150,9 +151,14 @@ pub struct PyTask {
 impl PyTask {
     #[new]
     #[pyo3(signature = (coro, *, r#loop))]
-    fn new(py: Python, coro: Py<PyAny>, r#loop: Py<CompioLoop>) -> PyResult<Bound<Self>> {
-        let spawn = r#loop.borrow(py).runtime()?.spawner();
-        let base = PyFuture::new(r#loop);
+    fn new<'py>(
+        py: Python<'py>,
+        coro: Py<PyAny>,
+        r#loop: &Bound<CompioLoop>,
+    ) -> PyResult<Bound<'py, Self>> {
+        let pyloop = r#loop.borrow();
+        let runtime = pyloop.runtime()?;
+        let base = PyFuture::new(r#loop.clone().unbind());
         let pycoro = coro.clone_ref(py);
         let coro = Coroutine::new(py, coro)?;
         let slf = Self {
@@ -161,7 +167,7 @@ impl PyTask {
         };
         let initializer = PyClassInitializer::from(base).add_subclass(slf);
         let rv = Bound::new(py, initializer)?;
-        let task = spawn(coro.run(rv.clone().unbind()));
+        let task = runtime.spawn(coro.run(rv.clone().unbind()));
         rv.borrow_mut().task.init(task).expect("same thread");
         Ok(rv)
     }

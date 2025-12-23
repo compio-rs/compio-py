@@ -23,8 +23,6 @@ use compio::{
 };
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict, types::PyWeakrefReference};
 
-use crate::send_wrapper::SendWrapper;
-
 /// Minimum number of _scheduled timer handles before cleanup of
 /// cancelled handles is performed.
 const MIN_SCHEDULED_TIMER_HANDLES: usize = 100;
@@ -158,8 +156,8 @@ impl Future for Timer {
             Poll::Ready(())
         } else {
             CURRENT_RUNTIME.with(|runtime| {
-                let when = runtime.epoch
-                    + Duration::try_from_secs_f64(self.when).unwrap_or_default();
+                let when =
+                    runtime.epoch + Duration::try_from_secs_f64(self.when).unwrap_or_default();
                 if when < Runtime::end_time() {
                     Poll::Ready(())
                 } else {
@@ -203,7 +201,7 @@ pub struct Runtime {
     epoch: Instant,
     stopping: Arc<AtomicBool>,
     driver: RefCell<Proactor>,
-    ready: Arc<SendWrapper<RefCell<VecDeque<Runnable>>>>,
+    ready: RefCell<VecDeque<Runnable>>,
     scheduled: RefCell<BinaryHeap<TimerKey>>,
     fatal_error: RefCell<Option<PyErr>>,
     timer_cancelled_count: Arc<AtomicUsize>,
@@ -216,7 +214,7 @@ impl Runtime {
             epoch: Instant::now(),
             stopping,
             driver: RefCell::new(Proactor::new()?),
-            ready: Arc::new(SendWrapper::new(RefCell::new(VecDeque::new()))),
+            ready: RefCell::new(VecDeque::new()),
             scheduled: RefCell::new(BinaryHeap::new()),
             fatal_error: RefCell::new(None),
             timer_cancelled_count: Arc::new(AtomicUsize::new(0)),
@@ -227,23 +225,16 @@ impl Runtime {
         self.driver.borrow().driver_type()
     }
 
-    pub fn spawner<F>(&self) -> impl FnOnce(F) -> Task<F::Output> + use<F>
+    pub fn spawn<F>(&self, fut: F) -> Task<F::Output>
     where
         F: Future,
     {
-        let ready_queue = self.ready.clone();
-        let schedule = move |runnable| {
-            ready_queue
-                .get()
-                .expect("same thread")
-                .borrow_mut()
-                .push_back(runnable);
+        let schedule = |runnable| {
+            self.ready.borrow_mut().push_back(runnable);
         };
-        move |fut| {
-            let (runnable, task) = unsafe { async_task::spawn_unchecked(fut, schedule) };
-            runnable.schedule();
-            task
-        }
+        let (runnable, task) = unsafe { async_task::spawn_unchecked(fut, schedule) };
+        runnable.schedule();
+        task
     }
 
     #[inline]
@@ -288,20 +279,19 @@ impl Runtime {
             }
         }
 
-        let ready = self.ready.get().expect("same thread");
-        let timeout = if !ready.borrow().is_empty() || self.stopping.load(atomic::Ordering::Acquire)
-        {
-            Some(Duration::default())
-        } else if let Some(next_scheduled) = self.scheduled.borrow().peek() {
-            Some(
-                next_scheduled
-                    .when
-                    .saturating_duration_since(Instant::now())
-                    .min(MAXIMUM_SELECT_TIMEOUT),
-            )
-        } else {
-            None
-        };
+        let timeout =
+            if !self.ready.borrow().is_empty() || self.stopping.load(atomic::Ordering::Acquire) {
+                Some(Duration::default())
+            } else if let Some(next_scheduled) = self.scheduled.borrow().peek() {
+                Some(
+                    next_scheduled
+                        .when
+                        .saturating_duration_since(Instant::now())
+                        .min(MAXIMUM_SELECT_TIMEOUT),
+                )
+            } else {
+                None
+            };
         eprintln!("Polling I/O with timeout {:?}", timeout);
         self.driver
             .borrow_mut()
@@ -332,10 +322,10 @@ impl Runtime {
         // callbacks scheduled by callbacks run this time around --
         // they will be run the next time (after another I/O poll).
         // Use an idiom that is thread-safe without using locks.
-        let ntodo = ready.borrow().len();
+        let ntodo = self.ready.borrow().len();
         eprintln!("Ready handles to run: {}", ntodo);
         for _ in 0..ntodo {
-            let runnable = ready.borrow_mut().pop_front().expect("not empty");
+            let runnable = self.ready.borrow_mut().pop_front().expect("not empty");
             runnable.run();
             if let Some(err) = self.fatal_error.take() {
                 return Err(err);
@@ -379,7 +369,7 @@ impl Drop for Runtime {
             key.waker.wake();
             println!("Drop TimerKey");
         }
-        self.ready.get().expect("same thread").take();
+        self.ready.take();
     }
 }
 

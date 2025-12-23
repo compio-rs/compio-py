@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MulanPSL-2.0
 // Copyright 2025 Fantix King
 
-use std::{
-    os::fd::{FromRawFd, OwnedFd},
-    sync::{
-        Arc,
-        atomic::{self, AtomicBool},
-    },
+use std::sync::{
+    Arc,
+    atomic::{self, AtomicBool},
 };
 
 use compio::driver::op::Recv;
@@ -172,7 +169,18 @@ impl CompioLoop {
                 let buf = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
 
                 let fd = sock.bind(py).call_method0("fileno")?.extract::<i32>()?;
-                let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+                let fd = {
+                    #[cfg(not(windows))]
+                    {
+                        use std::os::fd::{FromRawFd, OwnedFd};
+                        unsafe { OwnedFd::from_raw_fd(fd) }
+                    }
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::io::{FromRawHandle, OwnedHandle};
+                        unsafe { OwnedHandle::from_raw_handle(fd as *mut _) }
+                    }
+                };
                 Ok(Recv::new(fd, buf))
             })?;
             let nbytes = runtime::execute(op).await.0?;
