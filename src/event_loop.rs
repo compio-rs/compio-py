@@ -7,6 +7,7 @@ use std::sync::{
 };
 
 use compio::driver::op::Recv;
+use compio_log::*;
 use pyo3::{
     IntoPyObjectExt,
     buffer::PyBuffer,
@@ -38,6 +39,7 @@ impl CompioLoop {
     }
 
     fn __init__(slf: &Bound<Self>, py: Python) -> PyResult<()> {
+        debug!("Initializing CompioLoop");
         let stopping = slf.borrow().stopping.clone();
         let pyloop = PyWeakrefReference::new(slf)?.unbind();
         let runtime = py.detach(|| Runtime::new(pyloop, stopping))?;
@@ -45,6 +47,7 @@ impl CompioLoop {
             .runtime
             .init(runtime)
             .expect("uninitialized");
+        debug!("CompioLoop initialized");
         Ok(())
     }
 
@@ -132,7 +135,7 @@ impl CompioLoop {
     }
 
     fn stop(&self) {
-        eprintln!("Stopping event loop");
+        debug!("Stopping event loop");
         self.stopping.store(true, atomic::Ordering::SeqCst);
     }
 

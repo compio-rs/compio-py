@@ -8,10 +8,16 @@ High-performance Python `asyncio` alternative event loop powered by Rust's `comp
 
 ### Setup
 
-Install dependencies including `test` extras:
+Install dependencies (only needed once):
 
 ```bash
 uv sync
+```
+
+Or switch to enable logging support:
+
+```bash
+MATURIN_PEP517_ARGS="--features enable_log" uv sync --reinstall-package kloop
 ```
 
 ### Testing
@@ -22,6 +28,8 @@ Run the test suite:
 cargo test
 uv run -m unittest -v
 ```
+
+If `enable_log` feature is on, you can set `RUST_LOG` environment variable to see debug/tracing logs.
 
 ## License
 

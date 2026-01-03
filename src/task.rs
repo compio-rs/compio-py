@@ -1,4 +1,5 @@
 use async_task::Task;
+use compio_log::*;
 use pyo3::{
     exceptions::{PyKeyboardInterrupt, PyStopIteration, PySystemExit},
     prelude::*,
@@ -44,18 +45,18 @@ impl Coroutine {
     async fn run(self, pytask: Py<PyTask>) -> PyResult<Py<PyAny>> {
         let mut exc = None;
         loop {
-            eprintln!("Task step");
+            trace!("Task step");
             match self.step(&pytask, exc.take()).await? {
                 Some(Ok(result)) => {
-                    eprintln!("Task finished");
+                    debug!("Task finished");
                     break Ok(result);
                 }
                 Some(Err(e)) => {
-                    eprintln!("Task exception");
+                    debug!("Task exception");
                     exc = Some(e)
                 }
                 None => {
-                    eprintln!("Task continue");
+                    trace!("Task continue");
                 }
             }
         }
@@ -74,7 +75,7 @@ impl Coroutine {
                     .get_or_try_init(py, || PyTuple::new(py, vec![py.None()]).map(|b| b.unbind()))
                     .and_then(|args| self.coro_send.bind(py).call(args, None))
             };
-            eprintln!("Coroutine step result: {:?}", result);
+            trace!("Coroutine step result: {:?}", result);
             match result {
                 // If fut is a PyFuture, return Err<Py<PyFuture>> to indicate we need to wait
                 Ok(fut) => match fut.cast_into_exact() {

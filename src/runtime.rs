@@ -21,6 +21,7 @@ use compio::{
     BufResult,
     driver::{DriverType, Key, OpCode, Proactor, PushEntry},
 };
+use compio_log::*;
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict, types::PyWeakrefReference};
 
 /// Minimum number of _scheduled timer handles before cleanup of
@@ -166,7 +167,7 @@ impl Future for Timer {
                         waker: cx.waker().clone(),
                         cancelled: self.cancelled.clone(),
                     });
-                    println!("Timer scheduled for {:?}", when);
+                    trace!("Timer scheduled for {:?}", when);
                     self.get_mut().scheduled = true;
                     Poll::Pending
                 }
@@ -177,7 +178,7 @@ impl Future for Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        println!("Timer cancelled");
+        trace!("Timer cancelled");
         if self
             .cancelled
             .compare_exchange(
@@ -189,7 +190,7 @@ impl Drop for Timer {
             .is_ok()
             && self.scheduled
         {
-            println!("Timer cancelled counted");
+            debug!("Timer cancelled counted");
             self.timer_cancelled_count
                 .fetch_add(1, atomic::Ordering::Release);
         }
@@ -209,11 +210,14 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(pyloop: Py<PyWeakrefReference>, stopping: Arc<AtomicBool>) -> io::Result<Runtime> {
+        debug!("Creating new Runtime");
+        let driver = Proactor::new()?;
+        debug!("Runtime created with driver: {:?}", driver.driver_type());
         Ok(Runtime {
             pyloop,
             epoch: Instant::now(),
             stopping,
-            driver: RefCell::new(Proactor::new()?),
+            driver: RefCell::new(driver),
             ready: RefCell::new(VecDeque::new()),
             scheduled: RefCell::new(BinaryHeap::new()),
             fatal_error: RefCell::new(None),
@@ -292,7 +296,7 @@ impl Runtime {
             } else {
                 None
             };
-        eprintln!("Polling I/O with timeout {:?}", timeout);
+        debug!("Polling I/O with timeout {:?}", timeout);
         self.driver
             .borrow_mut()
             .poll(timeout)
@@ -323,7 +327,7 @@ impl Runtime {
         // they will be run the next time (after another I/O poll).
         // Use an idiom that is thread-safe without using locks.
         let ntodo = self.ready.borrow().len();
-        eprintln!("Ready handles to run: {}", ntodo);
+        debug!("Ready handles to run: {}", ntodo);
         for _ in 0..ntodo {
             let runnable = self.ready.borrow_mut().pop_front().expect("not empty");
             runnable.run();
@@ -350,11 +354,11 @@ impl Runtime {
     pub fn run(&self) -> PyResult<()> {
         CURRENT_RUNTIME.set(self, || {
             loop {
-                eprintln!("Before run_once");
+                trace!("Before run_once");
                 self.run_once()?;
-                eprintln!("After run_once");
+                trace!("After run_once");
                 if self.stopping.load(atomic::Ordering::SeqCst) {
-                    eprintln!("Runtime loop stopped");
+                    debug!("Runtime loop stopped");
                     break Ok(());
                 }
             }
@@ -364,10 +368,10 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        println!("Dropping runtime");
+        debug!("Dropping runtime");
         for key in self.scheduled.take() {
             key.waker.wake();
-            println!("Drop TimerKey");
+            trace!("Drop TimerKey");
         }
         self.ready.take();
     }
