@@ -41,7 +41,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "compio"
 version = "0.17.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
+source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -51,7 +51,7 @@ dependencies = [
 [[package]]
 name = "compio-buf"
 version = "0.7.1"
-source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
+source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
 dependencies = [
  "libc",
 ]
@@ -59,7 +59,7 @@ dependencies = [
 [[package]]
 name = "compio-driver"
 version = "0.10.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
+source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
 dependencies = [
  "cfg-if",
  "cfg_aliases",
@@ -73,6 +73,7 @@ dependencies = [
  "libc",
  "once_cell",
  "paste",
+ "pin-project-lite",
  "polling",
  "slab",
  "socket2",
@@ -82,7 +83,7 @@ dependencies = [
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=5e8326fed91973c1fb5aa404b689c46d1d6501c4#5e8326fed91973c1fb5aa404b689c46d1d6501c4"
+source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
 dependencies = [
  "tracing",
 ]
@@ -123,9 +124,9 @@ dependencies = [
 
 [[package]]
 name = "flume"
-version = "0.11.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
 dependencies = [
  "spin",
 ]

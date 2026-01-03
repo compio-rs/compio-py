@@ -18,6 +18,6 @@ async-task = { version = "4.7.1", default-features = false }
 
 [dependencies.compio]
 git = "https://github.com/compio-rs/compio.git"
-rev = "5e8326fed91973c1fb5aa404b689c46d1d6501c4"
+rev = "4c2bb42de3df30e475372774124e2485ec130727"
 default-features = false
 features = ["io-uring", "polling"]

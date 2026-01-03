@@ -181,7 +181,7 @@ impl CompioLoop {
                         unsafe { OwnedHandle::from_raw_handle(fd as *mut _) }
                     }
                 };
-                Ok(Recv::new(fd, buf))
+                Ok(Recv::new(fd, buf, 0))
             })?;
             let nbytes = runtime::execute(op).await.0?;
 
