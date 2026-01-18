@@ -98,6 +98,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "compio-py"
+version = "0.1.0"
+dependencies = [
+ "async-task",
+ "compio",
+ "compio-log",
+ "once_cell",
+ "pyo3",
+ "scoped-tls",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -218,19 +231,6 @@ dependencies = [
  "bytes",
  "io-uring",
  "rustix",
-]
-
-[[package]]
-name = "kLoop"
-version = "0.1.0"
-dependencies = [
- "async-task",
- "compio",
- "compio-log",
- "once_cell",
- "pyo3",
- "scoped-tls",
- "tracing-subscriber",
 ]
 
 [[package]]

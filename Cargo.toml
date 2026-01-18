@@ -1,5 +1,5 @@
 [package]
-name = "kLoop"
+name = "compio-py"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR MulanPSL-2.0"
