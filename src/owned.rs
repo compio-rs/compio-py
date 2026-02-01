@@ -511,9 +511,12 @@ mod tests {
     fn test_cross_thread_ownership() {
         let cell = Arc::new(OwnedRefCell::default());
         cell.init(42).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
 
         let cell_clone = Arc::clone(&cell);
+        let barrier_clone = barrier.clone();
         let handle = thread::spawn(move || {
+            barrier_clone.wait(); // Synchronize with main thread
             // Try to acquire from another thread
             let result = cell_clone.acquire(true);
             result.is_err() // Should fail if main thread holds ownership
@@ -521,6 +524,7 @@ mod tests {
 
         // Main thread holds ownership
         let _guard = cell.acquire(true).unwrap();
+        barrier.wait(); // Let other thread attempt to acquire
 
         // Other thread should fail to acquire
         let other_thread_failed = handle.join().unwrap();
