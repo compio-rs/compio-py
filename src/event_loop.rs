@@ -6,29 +6,34 @@ use std::sync::{
     atomic::{self, AtomicBool},
 };
 
+use async_task::Task;
 use compio::driver::op::Recv;
 use compio_log::*;
+use once_cell::sync::OnceCell;
 use pyo3::{
     IntoPyObjectExt,
     buffer::PyBuffer,
     exceptions::PyRuntimeError,
     exceptions::PyValueError,
+    ffi::c_str,
     prelude::*,
-    types::{PyTuple, PyWeakrefReference},
+    types::{PyDict, PyTuple, PyWeakrefReference},
 };
 
 use crate::{
-    future::PyFuture,
     handle::{Handle, TimerHandle},
     owned::{self, OwnedRefCell},
     runtime::{self, Runtime},
 };
+
+static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
 
 #[pyclass(subclass)]
 #[derive(Default)]
 pub struct CompioLoop {
     runtime: OwnedRefCell<Runtime>,
     stopping: Arc<AtomicBool>,
+    debug: Arc<AtomicBool>,
 }
 
 #[pymethods]
@@ -108,16 +113,14 @@ impl CompioLoop {
         Handle::new(py, callback, args, context)?.schedule_at(&runtime, py, when)
     }
 
-    fn sleep(slf: Bound<Self>, delay: f64) -> PyResult<PyFuture> {
-        let this = slf.borrow();
-        let runtime = this.runtime()?;
+    fn sleep<'py>(&self, py: Python<'py>, delay: f64) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = self.runtime()?;
         let when = runtime.since_epoch().as_secs_f64() + delay;
         let timer = runtime.timer(when);
-        let coro = async {
+        self.spawn_py(py, async {
             timer.await;
             Ok(Python::attach(|py| py.None()))
-        };
-        Ok(PyFuture::from_future(coro, slf.unbind()))
+        })
     }
 
     fn time(&self) -> PyResult<f64> {
@@ -151,10 +154,23 @@ impl CompioLoop {
         Ok(())
     }
 
+    fn get_debug(&self) -> bool {
+        self.debug.load(atomic::Ordering::Acquire)
+    }
+
+    fn set_debug(&self, value: bool) {
+        self.debug.store(value, atomic::Ordering::Release);
+    }
+
     // Completion based I/O methods returning Futures.
 
-    fn sock_recv_into(slf: Py<Self>, sock: Py<PyAny>, buf: Py<PyAny>) -> PyFuture {
-        let coro = async {
+    fn sock_recv_into<'py>(
+        &self,
+        py: Python<'py>,
+        sock: Py<PyAny>,
+        buf: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.spawn_py(py, async {
             let op = Python::attach(|py| {
                 let pybuf: PyBuffer<u8> = PyBuffer::get(buf.bind(py))?;
                 if pybuf.readonly() {
@@ -193,8 +209,7 @@ impl CompioLoop {
             drop(buf);
 
             Python::attach(|py| nbytes.into_py_any(py))
-        };
-        PyFuture::from_future(coro, slf)
+        })
     }
 }
 
@@ -209,6 +224,67 @@ impl CompioLoop {
             )),
         }
     }
+
+    /// Spawn a Rust Future onto the event loop, returning a connected Python Future.
+    /// When the Python Future is cancelled, the Rust Future is also cancelled.
+    fn spawn_py<'py, F>(&self, py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
+    where
+        F: Future<Output = PyResult<Py<PyAny>>>,
+    {
+        let cancellable = Bound::new(py, Cancellable { task: None })?;
+        let rv = COMPIO_FUTURE
+            .get()
+            .ok_or_else(|| PyRuntimeError::new_err("CompioFuture is not ready"))?
+            .bind(py)
+            .call1((cancellable.clone(),))?;
+
+        let py_fut: Py<PyAny> = rv.clone().unbind();
+        let cancellable_py = cancellable.clone().unbind();
+        let task = self.runtime()?.spawn(async move {
+            let result = fut.await;
+            Python::attach(|py| {
+                let py_fut = py_fut.bind(py);
+                if let Err(e) = match &result {
+                    Ok(result) => py_fut.call_method1("set_result", (result,)),
+                    Err(e) => py_fut.call_method1("set_exception", (e,)),
+                } {
+                    if cancellable_py.bind(py).borrow().task.is_none() {
+                        // The Python future was cancelled, but the Rust Task completed anyway.
+                        debug!(
+                            "CompioFuture completed after being cancelled, result: {:?}",
+                            result
+                        );
+                    } else {
+                        // The future was set by the user by mistake, log the exception.
+                        let _ = (|| {
+                            let context = PyDict::new(py);
+                            context.set_item("message", "CompioFuture is already done")?;
+                            context.set_item("future", py_fut)?;
+                            context.set_item("exception", e)?;
+                            if let Ok(result) = result {
+                                context.set_item("result", result)?;
+                            }
+                            runtime::call_exception_handler(py, context)
+                        })();
+                    }
+                }
+            })
+        });
+        cancellable.borrow_mut().task.replace(task);
+        Ok(rv)
+    }
+}
+
+#[pyclass]
+struct Cancellable {
+    task: Option<Task<()>>,
+}
+
+#[pymethods]
+impl Cancellable {
+    fn cancel(&mut self) {
+        drop(self.task.take());
+    }
 }
 
 struct StoreFalseGuard(Arc<AtomicBool>);
@@ -222,5 +298,34 @@ impl Drop for StoreFalseGuard {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompioLoop>()?;
+
+    // CompioFuture is a subclass of asyncio.Future that cancels the associated
+    // Rust Future when cancelled from Python. This is only constructed internally,
+    // so we don't need to expose it here.
+    let def = c_str!(
+        r#"
+import asyncio
+
+class CompioFuture(asyncio.Future):
+    def __init__(self, cancellable):
+        super().__init__()
+        self._cancellable = cancellable
+
+    def cancel(self, *args, **kwargs):
+        self._cancellable.cancel()
+        super().cancel(*args, **kwargs)
+"#
+    );
+    let py = m.py();
+    let locals = PyDict::new(py);
+    py.run(def, None, Some(&locals))?;
+    let future_type = locals
+        .get_item("CompioFuture")?
+        .expect("defined CompioFuture")
+        .unbind();
+    COMPIO_FUTURE
+        .set(future_type)
+        .expect("FUTURE_TYPE is empty");
+
     Ok(())
 }
