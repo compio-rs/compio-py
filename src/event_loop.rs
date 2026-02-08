@@ -7,7 +7,10 @@ use std::sync::{
 };
 
 use async_task::Task;
-use compio::driver::op::Recv;
+use compio::{
+    buf::IntoInner,
+    driver::op::{Asyncify, Recv},
+};
 use compio_log::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
@@ -160,6 +163,44 @@ impl CompioLoop {
 
     fn set_debug(&self, value: bool) {
         self.debug.store(value, atomic::Ordering::Release);
+    }
+
+    // Network I/O methods returning Futures.
+
+    #[pyo3(signature = (*args, **kwargs))]
+    fn getaddrinfo<'py>(
+        &self,
+        py: Python<'py>,
+        args: Py<PyTuple>,
+        kwargs: Option<Py<PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.spawn_py(py, async {
+            runtime::execute(Asyncify::new(|| {
+                let rv = Python::attach(|py| crate::import::getaddrinfo(py, args, kwargs));
+                compio::BufResult(Ok(0), rv)
+            }))
+            .await
+            .1
+            .into_inner()
+        })
+    }
+
+    #[pyo3(signature = (*args, **kwargs))]
+    fn getnameinfo<'py>(
+        &self,
+        py: Python<'py>,
+        args: Py<PyTuple>,
+        kwargs: Option<Py<PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.spawn_py(py, async {
+            runtime::execute(Asyncify::new(|| {
+                let rv = Python::attach(|py| crate::import::getnameinfo(py, args, kwargs));
+                compio::BufResult(Ok(0), rv)
+            }))
+            .await
+            .1
+            .into_inner()
+        })
     }
 
     // Completion based I/O methods returning Futures.
