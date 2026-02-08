@@ -30,7 +30,10 @@
 //! ```
 
 use once_cell::sync::OnceCell;
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
 /// Generates a function that imports a Python module with caching.
 ///
@@ -121,6 +124,7 @@ macro_rules! getattr {
 
 import!(asyncio);
 import!(contextvars);
+import!(socket);
 
 pub fn iscoroutine(py: Python, obj: &Bound<PyAny>) -> PyResult<bool> {
     getattr!(py, asyncio, "iscoroutine")
@@ -138,4 +142,24 @@ pub fn future_type(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
 /// function and calls it to create a snapshot of the current context.
 pub fn copy_context(py: Python) -> PyResult<Bound<PyAny>> {
     getattr!(py, contextvars, "copy_context").call0()
+}
+
+pub fn getaddrinfo(
+    py: Python,
+    args: Py<PyTuple>,
+    kwargs: Option<Py<PyDict>>,
+) -> PyResult<Py<PyAny>> {
+    getattr!(py, socket, "getaddrinfo")
+        .call(args, kwargs.as_ref().map(|d| d.bind(py)))
+        .map(|r| r.unbind())
+}
+
+pub fn getnameinfo(
+    py: Python,
+    args: Py<PyTuple>,
+    kwargs: Option<Py<PyDict>>,
+) -> PyResult<Py<PyAny>> {
+    getattr!(py, socket, "getnameinfo")
+        .call(args, kwargs.as_ref().map(|d| d.bind(py)))
+        .map(|r| r.unbind())
 }
