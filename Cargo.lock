@@ -49,8 +49,8 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "compio"
-version = "0.17.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
+version = "0.18.0"
+source = "git+https://github.com/compio-rs/compio.git?rev=88846e5e81e5833d53c72b605a90a432a7445de9#88846e5e81e5833d53c72b605a90a432a7445de9"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -59,16 +59,16 @@ dependencies = [
 
 [[package]]
 name = "compio-buf"
-version = "0.7.1"
-source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
+version = "0.8.0"
+source = "git+https://github.com/compio-rs/compio.git?rev=88846e5e81e5833d53c72b605a90a432a7445de9#88846e5e81e5833d53c72b605a90a432a7445de9"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "compio-driver"
-version = "0.10.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
+version = "0.11.1"
+source = "git+https://github.com/compio-rs/compio.git?rev=88846e5e81e5833d53c72b605a90a432a7445de9#88846e5e81e5833d53c72b605a90a432a7445de9"
 dependencies = [
  "cfg-if",
  "cfg_aliases",
@@ -85,14 +85,17 @@ dependencies = [
  "pin-project-lite",
  "polling",
  "slab",
+ "smallvec",
  "socket2",
+ "synchrony",
+ "thin-cell",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=4c2bb42de3df30e475372774124e2485ec130727#4c2bb42de3df30e475372774124e2485ec130727"
+source = "git+https://github.com/compio-rs/compio.git?rev=88846e5e81e5833d53c72b605a90a432a7445de9#88846e5e81e5833d53c72b605a90a432a7445de9"
 dependencies = [
  "tracing",
 ]
@@ -522,10 +525,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "synchrony"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de0208d3660701622272151bc63c35f5d32ca3d45c19785a9a8dc04dc797dc43"
+dependencies = [
+ "futures-util",
+]
+
+[[package]]
 name = "target-lexicon"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c"
+
+[[package]]
+name = "thin-cell"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4164c6c316ba9733b0ab021e7f9852c788a4b991b49c25820f1be48e1d41345b"
 
 [[package]]
 name = "thread_local"

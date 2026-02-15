@@ -50,11 +50,18 @@ impl CompioLoop {
         debug!("Initializing CompioLoop");
         let stopping = slf.borrow().stopping.clone();
         let pyloop = PyWeakrefReference::new(slf)?.unbind();
-        let runtime = py.detach(|| Runtime::new(pyloop, stopping))?;
-        slf.borrow_mut()
-            .runtime
-            .init(runtime)
-            .expect("uninitialized");
+        let slf = slf.clone().unbind();
+        py.detach(|| {
+            Runtime::new(pyloop, stopping).map(|runtime| {
+                Python::attach(|py| {
+                    slf.bind(py)
+                        .borrow_mut()
+                        .runtime
+                        .init(runtime)
+                        .expect("uninitialized");
+                })
+            })
+        })?;
         debug!("CompioLoop initialized");
         Ok(())
     }

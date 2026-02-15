@@ -227,7 +227,13 @@ impl<T> Default for OwnedRefCell<T> {
 /// - The `borrow` counter is only accessed by the owning thread
 /// - The value can be sent between threads when ownership is transferred
 /// - After initialization, the value is immutable (only read through shared references)
-unsafe impl<T> Sync for OwnedRefCell<T> where T: Send {}
+// FIXME: since compio-rs/compio#660, `Proactor` is no longer `Send`, so we tentatively
+// allow any `T` to be accessible from multiple threads, leaving undefined behavior
+// if `T` is not `Send`. A proper fix would be to explicitly pin the thread ID by the
+// runtime when it is known to be safe. See also #6.
+// unsafe impl<T> Sync for OwnedRefCell<T> where T: Send {}
+unsafe impl<T> Sync for OwnedRefCell<T> {}
+unsafe impl<T> Send for OwnedRefCell<T> {}
 
 /// A reference to a value inside an `OwnedRefCell`.
 ///
