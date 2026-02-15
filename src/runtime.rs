@@ -5,7 +5,9 @@ use std::{
     cell::RefCell,
     cmp,
     collections::{BinaryHeap, VecDeque},
-    io, panic,
+    io,
+    ops::Deref,
+    panic,
     pin::Pin,
     sync::{
         Arc,
@@ -20,7 +22,10 @@ use async_task::{Runnable, Task};
 use compio::{
     BufResult,
     buf::IntoInner,
-    driver::{DriverType, Key, OpCode, Proactor, PushEntry, op::Asyncify},
+    driver::{
+        AsFd, AsRawFd, DriverType, Key, OpCode, Proactor, PushEntry, SharedFd, ToSharedFd,
+        op::Asyncify,
+    },
 };
 use compio_log::*;
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict, types::PyWeakrefReference};
@@ -422,4 +427,67 @@ pub fn fatal_error(err: PyErr) {
             *fatal_error = Some(err);
         }
     });
+}
+
+// Attacher is copied and stripped from compio-runtime:
+// https://github.com/compio-rs/compio/blob/88846e5e81e5833d53c72b605a90a432a7445de9/compio-runtime/src/attacher.rs
+// Copyright (c) 2023 Berrysoft
+
+pub struct Attacher<S> {
+    source: SharedFd<S>,
+}
+
+impl<S> Attacher<S> {
+    pub unsafe fn new_unchecked(source: S) -> Self {
+        Self {
+            source: unsafe { SharedFd::new_unchecked(source) },
+        }
+    }
+}
+
+impl<S: AsFd> Attacher<S> {
+    pub fn new(source: S) -> io::Result<Self> {
+        CURRENT_RUNTIME.with(|runtime| {
+            runtime
+                .driver
+                .borrow_mut()
+                .attach(source.as_fd().as_raw_fd())
+        })?;
+        Ok(unsafe { Self::new_unchecked(source) })
+    }
+}
+
+#[cfg(windows)]
+impl<S: std::os::windows::io::FromRawHandle> std::os::windows::io::FromRawHandle for Attacher<S> {
+    unsafe fn from_raw_handle(handle: std::os::windows::io::RawHandle) -> Self {
+        unsafe { Self::new_unchecked(S::from_raw_handle(handle)) }
+    }
+}
+
+#[cfg(windows)]
+impl<S: std::os::windows::io::FromRawSocket> std::os::windows::io::FromRawSocket for Attacher<S> {
+    unsafe fn from_raw_socket(sock: std::os::windows::io::RawSocket) -> Self {
+        unsafe { Self::new_unchecked(S::from_raw_socket(sock)) }
+    }
+}
+
+#[cfg(unix)]
+impl<S: std::os::fd::FromRawFd> std::os::fd::FromRawFd for Attacher<S> {
+    unsafe fn from_raw_fd(fd: std::os::fd::RawFd) -> Self {
+        unsafe { Self::new_unchecked(S::from_raw_fd(fd)) }
+    }
+}
+
+impl<S> Deref for Attacher<S> {
+    type Target = S;
+
+    fn deref(&self) -> &Self::Target {
+        self.source.deref()
+    }
+}
+
+impl<S> ToSharedFd<S> for Attacher<S> {
+    fn to_shared_fd(&self) -> SharedFd<S> {
+        self.source.to_shared_fd()
+    }
 }

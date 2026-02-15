@@ -205,3 +205,9 @@ module!(socket {
             .map(|r| r.unbind())
     }
 });
+
+module!(weakref {
+    pub fn weak_key_dict(py: Python) -> PyResult<Bound<PyAny>> {
+        getattr!(py, weakref, "WeakKeyDictionary").call0()
+    }
+});

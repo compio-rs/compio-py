@@ -7,7 +7,7 @@ use std::sync::{
 };
 
 use async_task::Task;
-use compio::driver::op::Recv;
+use compio::driver::{SharedFd, ToSharedFd, op::Recv};
 use compio_log::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
@@ -17,7 +17,7 @@ use pyo3::{
     exceptions::PyValueError,
     ffi::c_str,
     prelude::*,
-    types::{PyDict, PyTuple, PyWeakrefReference},
+    types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
 };
 
 use crate::{
@@ -30,18 +30,23 @@ use crate::{
 static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
 
 #[pyclass(subclass)]
-#[derive(Default)]
 pub struct CompioLoop {
     runtime: OwnedRefCell<Runtime>,
     stopping: Arc<AtomicBool>,
     debug: Arc<AtomicBool>,
+    registered: Py<PyMapping>,
 }
 
 #[pymethods]
 impl CompioLoop {
     #[new]
-    fn new() -> Self {
-        Self::default()
+    fn new(py: Python) -> PyResult<Self> {
+        Ok(Self {
+            runtime: Default::default(),
+            stopping: Default::default(),
+            debug: Default::default(),
+            registered: import::weakref::weak_key_dict(py)?.cast_into()?.unbind(),
+        })
     }
 
     fn __init__(slf: &Bound<Self>, py: Python) -> PyResult<()> {
@@ -219,19 +224,7 @@ impl CompioLoop {
                 let len = pybuf.len_bytes();
                 let buf = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
 
-                let fd = sock.bind(py).call_method0("fileno")?.extract::<i32>()?;
-                let fd = {
-                    #[cfg(not(windows))]
-                    {
-                        use std::os::fd::{FromRawFd, OwnedFd};
-                        unsafe { OwnedFd::from_raw_fd(fd) }
-                    }
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::io::{FromRawHandle, OwnedHandle};
-                        unsafe { OwnedHandle::from_raw_handle(fd as *mut _) }
-                    }
-                };
+                let fd = self.socket_to_fd(py, &sock)?;
                 Ok(Recv::new(fd, buf, 0))
             })?;
             let nbytes = runtime::execute(op).await.0?;
@@ -305,6 +298,19 @@ impl CompioLoop {
         cancellable.borrow_mut().task.replace(task);
         Ok(rv)
     }
+
+    fn socket_to_fd(&self, py: Python, sock: &Py<PyAny>) -> PyResult<SharedFd<BorrowedFd>> {
+        let registered = self.registered.bind(py);
+        let sock = sock.bind(py);
+        let socket_ref = if registered.contains(sock)? {
+            registered.get_item(sock)?.cast_into()?
+        } else {
+            let socket_ref = SocketRef::from_raw(py, sock.call_method0("fileno")?.extract()?)?;
+            registered.set_item(sock, &socket_ref)?;
+            socket_ref
+        };
+        Ok(socket_ref.borrow().attacher.to_shared_fd())
+    }
 }
 
 #[pyclass]
@@ -325,6 +331,24 @@ impl Drop for StoreFalseGuard {
     #[inline]
     fn drop(&mut self) {
         self.0.store(false, atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(unix)]
+type BorrowedFd = std::os::fd::BorrowedFd<'static>;
+#[cfg(windows)]
+type BorrowedFd = std::os::windows::io::BorrowedHandle<'static>;
+
+#[pyclass(unsendable)]
+struct SocketRef {
+    attacher: runtime::Attacher<BorrowedFd>,
+}
+
+impl SocketRef {
+    fn from_raw(py: Python, fd: i32) -> PyResult<Bound<Self>> {
+        let fd = unsafe { BorrowedFd::borrow_raw(fd as _) };
+        let attacher = runtime::Attacher::new(fd)?;
+        Bound::new(py, Self { attacher })
     }
 }
 
