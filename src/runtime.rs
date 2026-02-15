@@ -5,7 +5,7 @@ use std::{
     cell::RefCell,
     cmp,
     collections::{BinaryHeap, VecDeque},
-    io,
+    io, panic,
     pin::Pin,
     sync::{
         Arc,
@@ -19,7 +19,8 @@ use std::{
 use async_task::{Runnable, Task};
 use compio::{
     BufResult,
-    driver::{DriverType, Key, OpCode, Proactor, PushEntry},
+    buf::IntoInner,
+    driver::{DriverType, Key, OpCode, Proactor, PushEntry, op::Asyncify},
 };
 use compio_log::*;
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict, types::PyWeakrefReference};
@@ -385,6 +386,19 @@ where
         state: Some(OpOrKey::Op(op)),
     }
     .await
+}
+
+pub async fn asyncify<T, F>(f: F) -> T
+where
+    T: Send + 'static,
+    F: (FnOnce() -> T) + Send + 'static,
+{
+    let op = Asyncify::new(|| {
+        let rv = panic::catch_unwind(panic::AssertUnwindSafe(f));
+        BufResult(Ok(0), rv)
+    });
+    let res = execute(op).await.1.into_inner();
+    res.unwrap_or_else(|e| panic::resume_unwind(e))
 }
 
 pub fn call_exception_handler(py: Python, context: Bound<PyDict>) -> PyResult<()> {
