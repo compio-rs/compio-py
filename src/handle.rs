@@ -11,7 +11,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::{runtime, runtime::Runtime};
+use crate::{import, runtime, runtime::Runtime};
 
 #[pyclass(subclass, weakref)]
 pub struct Handle {
@@ -31,7 +31,7 @@ impl Handle {
         // If no context is provided, copy the current context
         let context = match context {
             Some(ctx) => ctx,
-            None => crate::import::copy_context(py)?.unbind(),
+            None => import::contextvars::copy_context(py)?.unbind(),
         };
         Ok(Self {
             callback,
