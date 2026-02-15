@@ -73,6 +73,7 @@ impl<T: OpCode + 'static> Future for OpFuture<T> {
     }
 }
 
+#[allow(unused)]
 #[derive(Default)]
 pub struct Yield(bool);
 

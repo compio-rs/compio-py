@@ -179,7 +179,7 @@ impl CompioLoop {
         args: Py<PyTuple>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let f = || Python::attach(|py| import::getaddrinfo(py, args, kwargs));
+        let f = || Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs));
         self.spawn_py(py, runtime::asyncify(f))
     }
 
@@ -190,7 +190,7 @@ impl CompioLoop {
         args: Py<PyTuple>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let f = || Python::attach(|py| import::getnameinfo(py, args, kwargs));
+        let f = || Python::attach(|py| import::socket::getnameinfo(py, args, kwargs));
         self.spawn_py(py, runtime::asyncify(f))
     }
 

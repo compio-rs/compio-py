@@ -3,6 +3,8 @@
 // Copyright 2024 compio-rs
 // Copyright 2025 Fantix King
 
+#![allow(unused)]
+
 use std::{
     mem::{self, ManuallyDrop},
     num::NonZero,

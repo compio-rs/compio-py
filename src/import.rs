@@ -30,10 +30,7 @@
 //! ```
 
 use once_cell::sync::OnceCell;
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::prelude::*;
 
 /// Generates a function that imports a Python module with caching.
 ///
@@ -117,49 +114,94 @@ macro_rules! import {
 macro_rules! getattr {
     ($py:expr, $module_name:ident, $name:expr) => {{
         static OBJ: OnceCell<Py<PyAny>> = OnceCell::new();
-        OBJ.get_or_try_init(|| $module_name($py)?.getattr($name).map(|f| f.unbind()))?
+        OBJ.get_or_try_init(|| super::$module_name($py)?.getattr($name).map(|f| f.unbind()))?
             .bind($py)
     }};
 }
 
-import!(asyncio);
-import!(contextvars);
-import!(socket);
-
-pub fn iscoroutine(py: Python, obj: &Bound<PyAny>) -> PyResult<bool> {
-    getattr!(py, asyncio, "iscoroutine")
-        .call1((obj,))?
-        .extract()
-}
-
-pub fn future_type(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
-    Ok(getattr!(py, asyncio, "Future"))
-}
-
-/// Returns a copy of the current Python context.
+/// Creates a module wrapper with standard imports and boilerplate.
 ///
-/// This function provides cached access to Python's `contextvars.copy_context()`
-/// function and calls it to create a snapshot of the current context.
-pub fn copy_context(py: Python) -> PyResult<Bound<PyAny>> {
-    getattr!(py, contextvars, "copy_context").call0()
+/// This macro combines the `import!` macro with a module definition that includes
+/// the standard `use` statements needed for working with Python objects.
+///
+/// # Arguments
+///
+/// * `$module_name` - The name of the Python module to import
+/// * `$($item)*` - The module contents (functions, types, etc.)
+///
+/// # Example
+///
+/// ```ignore
+/// // Without attributes
+/// module!(socket {
+///     pub fn getaddrinfo(...) -> PyResult<...> { ... }
+/// });
+///
+/// // With attributes (e.g., #[allow(unused)])
+/// module!(#[allow(unused)] asyncio {
+///     pub fn iscoroutine(py: Python, obj: &Bound<PyAny>) -> PyResult<bool> {
+///         getattr!(py, asyncio, "iscoroutine")
+///             .call1((obj,))?
+///             .extract()
+///     }
+/// });
+/// ```
+macro_rules! module {
+    ($(#[$attr:meta])* $module_name:ident { $($item:tt)* }) => {
+        import!($module_name);
+
+        $(#[$attr])*
+        pub mod $module_name {
+            use once_cell::sync::OnceCell;
+            use pyo3::prelude::*;
+
+            $($item)*
+        }
+    };
 }
 
-pub fn getaddrinfo(
-    py: Python,
-    args: Py<PyTuple>,
-    kwargs: Option<Py<PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    getattr!(py, socket, "getaddrinfo")
-        .call(args, kwargs.as_ref().map(|d| d.bind(py)))
-        .map(|r| r.unbind())
-}
+module!(#[allow(unused)] asyncio {
+    pub fn iscoroutine(py: Python, obj: &Bound<PyAny>) -> PyResult<bool> {
+        getattr!(py, asyncio, "iscoroutine")
+            .call1((obj,))?
+            .extract()
+    }
 
-pub fn getnameinfo(
-    py: Python,
-    args: Py<PyTuple>,
-    kwargs: Option<Py<PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    getattr!(py, socket, "getnameinfo")
-        .call(args, kwargs.as_ref().map(|d| d.bind(py)))
-        .map(|r| r.unbind())
-}
+    pub fn future_type(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+        Ok(getattr!(py, asyncio, "Future"))
+    }
+});
+
+module!(contextvars {
+    /// Returns a copy of the current Python context.
+    ///
+    /// This function provides cached access to Python's `contextvars.copy_context()`
+    /// function and calls it to create a snapshot of the current context.
+    pub fn copy_context(py: Python) -> PyResult<Bound<PyAny>> {
+        getattr!(py, contextvars, "copy_context").call0()
+    }
+});
+
+module!(socket {
+    use pyo3::types::{PyDict, PyTuple};
+
+    pub fn getaddrinfo(
+        py: Python,
+        args: Py<PyTuple>,
+        kwargs: Option<Py<PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        getattr!(py, socket, "getaddrinfo")
+            .call(args, kwargs.as_ref().map(|d| d.bind(py)))
+            .map(|r| r.unbind())
+    }
+
+    pub fn getnameinfo(
+        py: Python,
+        args: Py<PyTuple>,
+        kwargs: Option<Py<PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        getattr!(py, socket, "getnameinfo")
+            .call(args, kwargs.as_ref().map(|d| d.bind(py)))
+            .map(|r| r.unbind())
+    }
+});
