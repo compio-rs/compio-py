@@ -61,7 +61,7 @@ impl<T: OpCode + 'static> Future for OpFuture<T> {
             };
             match entry {
                 PushEntry::Pending(mut key) => {
-                    driver.update_waker(&mut key, cx.waker().clone());
+                    driver.update_waker(&mut key, cx.waker());
                     drop(driver);
                     self.state.replace(OpOrKey::Key(key));
                     Poll::Pending

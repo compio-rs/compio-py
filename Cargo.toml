@@ -22,10 +22,10 @@ tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter
 
 [dependencies.compio]
 git = "https://github.com/compio-rs/compio.git"
-rev = "4c2bb42de3df30e475372774124e2485ec130727"
+rev = "88846e5e81e5833d53c72b605a90a432a7445de9"
 default-features = false
 features = ["io-uring", "polling"]
 
 [dependencies.compio-log]
 git = "https://github.com/compio-rs/compio.git"
-rev = "4c2bb42de3df30e475372774124e2485ec130727"
+rev = "88846e5e81e5833d53c72b605a90a432a7445de9"
