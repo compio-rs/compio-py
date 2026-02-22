@@ -25,6 +25,7 @@ use crate::{
     import,
     owned::{self, OwnedRefCell},
     runtime::{self, Runtime},
+    socket,
 };
 
 static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
@@ -184,7 +185,9 @@ impl CompioLoop {
         args: Py<PyTuple>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let f = || Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs));
+        let f = || {
+            Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs).map(|r| r.unbind()))
+        };
         self.spawn_py(py, runtime::asyncify(f))
     }
 
@@ -236,6 +239,36 @@ impl CompioLoop {
             Python::attach(|py| nbytes.into_py_any(py))
         })
     }
+
+    #[pyo3(signature = (family=-1, r#type=-1, proto=-1))]
+    fn create_socket<'py>(
+        slf: Bound<'py, Self>,
+        py: Python<'py>,
+        family: i32,
+        r#type: i32,
+        proto: i32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        use socket2::{Domain, Protocol, Type};
+
+        let domain = if family == -1 {
+            Domain::IPV4
+        } else {
+            Domain::from(family)
+        };
+        let ty = if r#type == -1 {
+            Type::STREAM
+        } else {
+            Type::from(r#type)
+        };
+        let protocol = if proto == -1 {
+            None
+        } else {
+            Some(Protocol::from(proto))
+        };
+        let pyloop = slf.clone().unbind();
+        slf.borrow()
+            .spawn_py(py, socket::PySocket::new(pyloop, domain, ty, protocol))
+    }
 }
 
 impl CompioLoop {
@@ -252,7 +285,7 @@ impl CompioLoop {
 
     /// Spawn a Rust Future onto the event loop, returning a connected Python Future.
     /// When the Python Future is cancelled, the Rust Future is also cancelled.
-    fn spawn_py<'py, F>(&self, py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
+    pub fn spawn_py<'py, F>(&self, py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
     where
         F: Future<Output = PyResult<Py<PyAny>>>,
     {

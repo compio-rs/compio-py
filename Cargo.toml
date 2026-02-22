@@ -19,13 +19,14 @@ once_cell = "1.21.3"
 scoped-tls = "1.0.1"
 async-task = { version = "4.7.1", default-features = false }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+socket2 = "0.6.2"
 
 [dependencies.compio]
 git = "https://github.com/compio-rs/compio.git"
-rev = "8decea5007df7796abd85c5fa7c0c819915dfde8"
+rev = "8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"
 default-features = false
-features = ["io-uring", "polling"]
+features = ["io-uring", "polling", "io"]
 
 [dependencies.compio-log]
 git = "https://github.com/compio-rs/compio.git"
-rev = "8decea5007df7796abd85c5fa7c0c819915dfde8"
+rev = "8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"

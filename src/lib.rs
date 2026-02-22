@@ -9,6 +9,7 @@ mod import;
 mod owned;
 mod runtime;
 mod send_wrapper;
+mod socket;
 mod thread;
 
 /// A Python module implemented in Rust. The name of this module must match
@@ -33,5 +34,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     event_loop::register(m)?;
     handle::register(m)?;
+    socket::register(m)?;
     Ok(())
 }
