@@ -4,6 +4,7 @@
 use std::{
     io,
     net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4},
+    sync::Arc,
 };
 
 use compio::{
@@ -12,10 +13,15 @@ use compio::{
         AsRawFd, ToSharedFd, impl_raw_fd,
         op::{BufResultExt, CloseSocket, Connect, Recv, Send, ShutdownSocket},
     },
+    io::{AsyncRead, AsyncWrite},
+    tls::{
+        TlsAcceptor, TlsConnector,
+        py_dynamic_openssl::{self, SSLContext},
+        rustls::{self, pki_types::CertificateDer},
+    },
 };
 use pyo3::{
     IntoPyObjectExt,
-    buffer::PyBuffer,
     exceptions::{PyOSError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyByteArray, PyBytes, PyList, PyTuple},
@@ -23,9 +29,11 @@ use pyo3::{
 use socket2::{Domain, Protocol, SockAddr, Socket as Socket2, Type};
 
 use crate::{
+    Either,
     event_loop::CompioLoop,
-    import,
+    extract_py_err, import, py_any_to_buffer,
     runtime::{self, Attacher},
+    ssl::{RustlsContext, SSLImpl, SSLSocket, SSLSocketMetadata},
 };
 
 #[pyclass(unsendable, name = "Socket")]
@@ -140,12 +148,12 @@ impl PySocket {
     ) -> PyResult<Bound<'py, PyAny>> {
         self.pyloop.bind(py).borrow().spawn_py(py, async move {
             let inner = self.inner()?;
-            let buf = Vec::with_capacity(bufsize);
-            let result = inner.recv(buf, flags).await;
-            let bytes_read = result.0?;
-            let mut buf = result.1;
-            buf.truncate(bytes_read);
-            Python::attach(|py| PyBytes::new(py, &buf).into_py_any(py))
+            let buf: Vec<u8> = Vec::with_capacity(bufsize);
+            let (bytes_read, buf) = buf_try!(@try inner.recv(buf, flags).await);
+            Python::attach(|py| {
+                PyBytes::new_with_writer(py, bytes_read, |w| Ok(w.write_all(&buf[..bytes_read])?))?
+                    .into_py_any(py)
+            })
         })
     }
 
@@ -158,22 +166,105 @@ impl PySocket {
     ) -> PyResult<Bound<'py, PyAny>> {
         self.pyloop.bind(py).borrow().spawn_py(py, async move {
             let inner = self.inner()?;
-            let buf = Python::attach(|py| {
-                let pybuf: PyBuffer<u8> = PyBuffer::get(data.bind(py))?;
-                if pybuf.is_c_contiguous() {
-                    let ptr = pybuf.buf_ptr() as *mut u8;
-                    let len = pybuf.len_bytes();
-                    Ok(Ok(unsafe { std::slice::from_raw_parts(ptr, len) }))
-                } else {
-                    pybuf.to_vec(py).map(|buf| Err(buf))
-                }
-            })?;
-            let bytes_written = match buf {
-                Ok(buf) => inner.send(buf, flags).await.0?,
-                Err(buf) => inner.send(buf, flags).await.0?,
-            };
+            let buf = Python::attach(|py| py_any_to_buffer(py, data.bind(py)))?;
+            let (bytes_written, _) = buf_try!(@try inner.send(buf, flags).await);
             drop(data);
             Python::attach(|py| bytes_written.into_py_any(py))
+        })
+    }
+
+    #[pyo3(signature = (sslcontext=None, *, server_side=false, server_hostname=None))]
+    fn start_tls<'py>(
+        &mut self,
+        py: Python<'py>,
+        sslcontext: Option<Py<PyAny>>,
+        server_side: bool,
+        server_hostname: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.pyloop.bind(py).borrow().spawn_py(py, async move {
+            let mut metadata = SSLSocketMetadata::default();
+            metadata.server_side = server_side;
+
+            // First, verify parameters and prepare either TlsAcceptor or TlsConnector.
+            let tls = Python::attach(|py| {
+                let has_ossl = py_dynamic_openssl::load_py(py)?;
+                // Coerce sslcontext to either SSLContext or RustlsContext
+                let ctx: Either<_, Bound<RustlsContext>> = match sslcontext
+                    .map(|ctx| ctx.into_bound(py))
+                {
+                    Some(ctx) if import::ssl::is_ssl_context(py, &ctx)? => has_ossl
+                        .then(|| Either::Left(ctx))
+                        .ok_or_else(|| PyTypeError::new_err("ssl.SSLContext is not supported"))?,
+                    Some(ctx) => ctx.cast_into().map(Either::Right).map_err(|e| {
+                        PyTypeError::new_err(format!("illegal sslcontext: {:?}", e.into_inner()))
+                    })?,
+                    None if !server_side => Either::Left(import::ssl::create_default_context(py)?),
+                    None => Err(PyValueError::new_err("server_side requires sslcontext"))?,
+                };
+                // Build TlsAcceptor or TlsConnector from the context
+                match ctx {
+                    Either::Left(ctx) if has_ossl => SSLContext::try_from(ctx).map(|ctx| {
+                        if server_side {
+                            Either::Left(TlsAcceptor::from(ctx))
+                        } else {
+                            Either::Right(TlsConnector::from(ctx))
+                        }
+                    }),
+                    Either::Left(ctx) => {
+                        // This case is guaranteed to be a default client-side SSLContext
+                        debug_assert!(!server_side);
+                        let ca_certs: Bound<PyList> =
+                            ctx.call_method1("get_ca_certs", (true,))?.cast_into()?;
+                        let mut root_store = rustls::RootCertStore::empty();
+                        for cert in ca_certs.iter() {
+                            let cert: Bound<PyBytes> = cert.cast_into()?;
+                            let cert = cert.as_bytes();
+                            root_store
+                                .add(CertificateDer::from(cert))
+                                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                        }
+                        let config = rustls::ClientConfig::builder()
+                            .with_root_certificates(root_store)
+                            .with_no_client_auth();
+                        Ok(Either::Right(TlsConnector::from(Arc::new(config))))
+                    }
+                    Either::Right(ctx) => {
+                        metadata.implementation = SSLImpl::Rustls;
+                        let ctx = ctx.borrow();
+                        Ok(match ctx.build(py, server_side)? {
+                            Either::Left(c) => Either::Left(TlsAcceptor::from(c)),
+                            Either::Right(c) => Either::Right(TlsConnector::from(c)),
+                        })
+                    }
+                }
+            })?;
+
+            // Then, do TLS handshake accordingly
+            let Some(inner) = self.inner.take() else {
+                return Err(PyOSError::new_err("socket is closed"));
+            };
+            metadata.fd = inner.as_raw_fd();
+            let stream = SocketStream { inner };
+            let stream = match tls {
+                Either::Left(acceptor) => extract_py_err(acceptor.accept(stream).await)?,
+                Either::Right(connector) => {
+                    let name = match server_hostname {
+                        Some(name) => name,
+                        None => stream
+                            .inner
+                            .socket
+                            .peer_addr()?
+                            .as_socket()
+                            .ok_or_else(|| PyValueError::new_err("unknown server_hostname"))?
+                            .ip()
+                            .to_string(),
+                    };
+                    extract_py_err(connector.connect(&name, stream).await)?
+                }
+            };
+
+            // At last, wrap the TlsStream in an SSLSocket
+            Python::attach(|py| SSLSocket::new(py, &self.pyloop, stream, metadata)?.into_py_any(py))
         })
     }
 
@@ -208,6 +299,34 @@ impl PySocket {
         })
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct SocketStream {
+    inner: Socket,
+}
+
+impl AsyncRead for SocketStream {
+    #[inline]
+    async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+        self.inner.recv(buf, 0).await
+    }
+}
+
+impl AsyncWrite for SocketStream {
+    async fn write<T: IoBuf>(&mut self, buf: T) -> BufResult<usize, T> {
+        self.inner.send(buf, 0).await
+    }
+
+    async fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> io::Result<()> {
+        self.inner.shutdown(Shutdown::Write).await
+    }
+}
+
+impl_raw_fd!(SocketStream, socket2::Socket, inner, socket);
 
 async fn name_to_ip(name: Vec<u8>, family: impl Into<i32>) -> PyResult<String> {
     let family = family.into();
@@ -258,7 +377,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 // https://github.com/compio-rs/compio/blob/8cf1b4db78c93f37d462b85bd1f445caa7fca4d5/compio-net/src/socket.rs
 // Copyright (c) 2023 Berrysoft
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Socket {
     socket: Attacher<Socket2>,
 }

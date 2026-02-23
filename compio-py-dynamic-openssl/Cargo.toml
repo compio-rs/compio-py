@@ -1,0 +1,17 @@
+[package]
+name = "compio-py-dynamic-openssl"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Dynamic OpenSSL implementation for compio-py"
+keywords = ["tls", "openssl", "compio"]
+categories = ["network-programming"]
+
+[dependencies]
+libloading = "0.9.0"
+pyo3 = { workspace = true }
+
+[target."cfg(unix)".dependencies.cfg-if]
+version = "1"
