@@ -3,10 +3,19 @@
 
 from __future__ import annotations
 from collections.abc import Callable
-from typing import Any, Optional, TypeVarTuple, Unpack
+from typing import Any, Optional, TypeAlias, TypeVarTuple, Unpack
 
 import asyncio
+import socket
+import sys
 from contextvars import Context
+
+if sys.version_info >= (3, 12):
+    from collections.abc import Buffer
+else:
+    from typing_extensions import Buffer
+
+_Address: TypeAlias = tuple[Any, ...]
 
 class Handle:
     def cancel(self) -> None: ...
@@ -55,3 +64,16 @@ class CompioLoop:
     def run_forever(self) -> None: ...
     def stop(self) -> None: ...
     def close(self) -> None: ...
+    def create_socket(
+        self,
+        family: socket.AddressFamily | int = -1,
+        type: socket.SocketKind | int = -1,
+        proto: int = -1,
+    ) -> Socket: ...
+
+class Socket:
+    async def connect(self, address: _Address, /) -> None: ...
+    async def recv(self, bufsize: int, flags: int = 0, /) -> bytes: ...
+    async def send(self, data: Buffer, flags: int = 0, /) -> int: ...
+    async def shutdown(self, how: int, /) -> None: ...
+    async def close(self) -> None: ...

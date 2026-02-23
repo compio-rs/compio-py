@@ -457,6 +457,22 @@ impl<S: AsFd> Attacher<S> {
     }
 }
 
+impl<S> IntoInner for Attacher<S> {
+    type Inner = SharedFd<S>;
+
+    fn into_inner(self) -> Self::Inner {
+        self.source
+    }
+}
+
+impl<S> Clone for Attacher<S> {
+    fn clone(&self) -> Self {
+        Self {
+            source: self.source.clone(),
+        }
+    }
+}
+
 #[cfg(windows)]
 impl<S: std::os::windows::io::FromRawHandle> std::os::windows::io::FromRawHandle for Attacher<S> {
     unsafe fn from_raw_handle(handle: std::os::windows::io::RawHandle) -> Self {

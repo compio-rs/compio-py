@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -50,25 +56,28 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "compio"
 version = "0.18.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=8decea5007df7796abd85c5fa7c0c819915dfde8#8decea5007df7796abd85c5fa7c0c819915dfde8"
+source = "git+https://github.com/compio-rs/compio.git?rev=8cf1b4db78c93f37d462b85bd1f445caa7fca4d5#8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"
 dependencies = [
  "compio-buf",
  "compio-driver",
+ "compio-io",
  "compio-log",
 ]
 
 [[package]]
 name = "compio-buf"
 version = "0.8.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=8decea5007df7796abd85c5fa7c0c819915dfde8#8decea5007df7796abd85c5fa7c0c819915dfde8"
+source = "git+https://github.com/compio-rs/compio.git?rev=8cf1b4db78c93f37d462b85bd1f445caa7fca4d5#8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"
 dependencies = [
+ "arrayvec",
+ "bytes",
  "libc",
 ]
 
 [[package]]
 name = "compio-driver"
 version = "0.11.1"
-source = "git+https://github.com/compio-rs/compio.git?rev=8decea5007df7796abd85c5fa7c0c819915dfde8#8decea5007df7796abd85c5fa7c0c819915dfde8"
+source = "git+https://github.com/compio-rs/compio.git?rev=8cf1b4db78c93f37d462b85bd1f445caa7fca4d5#8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -94,9 +103,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "compio-io"
+version = "0.9.0"
+source = "git+https://github.com/compio-rs/compio.git?rev=8cf1b4db78c93f37d462b85bd1f445caa7fca4d5#8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"
+dependencies = [
+ "compio-buf",
+ "futures-util",
+ "paste",
+ "synchrony",
+]
+
+[[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio.git?rev=8decea5007df7796abd85c5fa7c0c819915dfde8#8decea5007df7796abd85c5fa7c0c819915dfde8"
+source = "git+https://github.com/compio-rs/compio.git?rev=8cf1b4db78c93f37d462b85bd1f445caa7fca4d5#8cf1b4db78c93f37d462b85bd1f445caa7fca4d5"
 dependencies = [
  "tracing",
 ]
@@ -111,6 +131,7 @@ dependencies = [
  "once_cell",
  "pyo3",
  "scoped-tls",
+ "socket2",
  "tracing-subscriber",
 ]
 
@@ -175,6 +196,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-sink"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c39754e157331b013978ec91992bde1ac089843443c49cbc7f46150b0fad0893"
+
+[[package]]
 name = "futures-task"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -188,6 +215,7 @@ checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
  "futures-core",
  "futures-macro",
+ "futures-sink",
  "futures-task",
  "pin-project-lite",
  "slab",

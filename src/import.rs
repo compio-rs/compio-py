@@ -183,16 +183,29 @@ module!(contextvars {
 });
 
 module!(socket {
-    use pyo3::types::{PyDict, PyTuple};
+    use pyo3::{types::{PyDict, PyTuple}, call::PyCallArgs};
 
-    pub fn getaddrinfo(
-        py: Python,
-        args: Py<PyTuple>,
+    pub fn shut_wr(py: Python) -> PyResult<i32> {
+        getattr!(py, socket, "SHUT_WR").extract()
+    }
+
+    pub fn shut_rd(py: Python) -> PyResult<i32> {
+        getattr!(py, socket, "SHUT_RD").extract()
+    }
+
+    pub fn shut_rdwr(py: Python) -> PyResult<i32> {
+        getattr!(py, socket, "SHUT_RDWR").extract()
+    }
+
+    pub fn getaddrinfo<'py, A>(
+        py: Python<'py>,
+        args: A,
         kwargs: Option<Py<PyDict>>,
-    ) -> PyResult<Py<PyAny>> {
+    ) -> PyResult<Bound<'py, PyAny>> where
+        A: PyCallArgs<'py>,
+    {
         getattr!(py, socket, "getaddrinfo")
             .call(args, kwargs.as_ref().map(|d| d.bind(py)))
-            .map(|r| r.unbind())
     }
 
     pub fn getnameinfo(
