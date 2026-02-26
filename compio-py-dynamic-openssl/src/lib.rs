@@ -6,9 +6,8 @@ use std::{
     net::IpAddr,
 };
 
-pub use self::loader::{get, is_loaded, load};
+pub use self::loader::{Error, get, is_loaded, load};
 use self::{
-    loader::Error,
     ssl::{HandshakeError, Ssl, SslStream},
     sys as ffi,
 };
