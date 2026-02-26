@@ -164,7 +164,12 @@ impl OpenSSL {
                         );
                     }
                 }
-                unsafe { libloading::os::unix::Library::open(Some(filename), RTLD_NOLOAD)? }
+                unsafe {
+                    libloading::os::unix::Library::open(
+                        Some(filename),
+                        RTLD_NOLOAD | libloading::os::unix::RTLD_LAZY,
+                    )?
+                }
             }
         };
 
