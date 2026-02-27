@@ -13,7 +13,7 @@ name = "_core"
 crate-type = ["cdylib"]
 
 [features]
-enable_log = ["compio-log/enable_log", "tracing-subscriber"]
+enable_log = ["compio/enable_log", "tracing-subscriber"]
 
 [dependencies]
 # "extension-module" tells pyo3 we want to build an extension module (skips linking against libpython.so)
@@ -26,13 +26,5 @@ socket2 = "0.6.2"
 rustls-webpki = "0"
 pem = "3.0.6"
 pkcs8 = { version = "0.10.2", features = ["encryption"] }
-
-[dependencies.compio]
-git = "https://github.com/fantix/compio.git"
-rev = "57ab32085919ecde0a20def23074e4a19dd978ff"
-default-features = false
-features = ["io-uring", "polling", "io", "py-dynamic-openssl", "rustls", "ring"]
-
-[dependencies.compio-log]
-git = "https://github.com/fantix/compio.git"
-rev = "57ab32085919ecde0a20def23074e4a19dd978ff"
+compio = { workspace = true, features = ["io-uring", "polling", "io", "py-dynamic-openssl", "rustls", "ring"] }
+compio-log = { workspace = true }

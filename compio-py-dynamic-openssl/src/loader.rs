@@ -2,18 +2,23 @@
 // Copyright 2026 Fantix King
 
 use std::{
-    ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_ulong, c_void},
+    ffi::{OsStr, c_char, c_int, c_long, c_uchar, c_uint, c_ulong, c_void},
+    io,
     sync::OnceLock,
 };
 
-use libloading::{AsFilename, Library};
+use libloading::{Library, Symbol};
 
 use crate::sys::*;
 
 static OPENSSL: OnceLock<OpenSSL> = OnceLock::new();
 
 pub enum Error {
+    IoError(io::Error),
     Loader(libloading::Error),
+    #[cfg(windows)]
+    PE(pelite::Error),
+    LibraryNotFound,
     AlreadyLoaded,
     VersionTooOld,
 }
@@ -24,9 +29,22 @@ impl From<libloading::Error> for Error {
     }
 }
 
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Self::IoError(value)
+    }
+}
+
+#[cfg(windows)]
+impl From<pelite::Error> for Error {
+    fn from(value: pelite::Error) -> Self {
+        Self::PE(value)
+    }
+}
+
 #[allow(bad_style)]
 pub struct OpenSSL {
-    lib: Library,
+    lib: OsslLibraries,
     pub version_num: c_ulong,
 
     pub BIO_meth_new: unsafe extern "C" fn(type_: c_int, name: *const c_char) -> *mut BIO_METHOD,
@@ -123,55 +141,140 @@ pub struct OpenSSL {
     pub ERR_reason_error_string: unsafe extern "C" fn(err: c_ulong) -> *const c_char,
 }
 
-impl OpenSSL {
-    fn load(filename: impl AsFilename) -> Result<Self, Error> {
-        let lib = {
-            #[cfg(windows)]
-            {
-                libloading::os::windows::Library::open_already_loaded(filename)?
-            }
-            #[cfg(unix)]
-            {
-                cfg_if::cfg_if! {
-                    if #[cfg(any(
-                        target_os = "linux",
-                        target_os = "android",
-                        target_os = "emscripten",
-                        target_os = "solaris",
-                        target_os = "illumos",
-                        target_os = "fuchsia",
-                        target_os = "hurd",
-                    ))] {
-                        const RTLD_NOLOAD: c_int = 0x4;
-                    } else if #[cfg(any(
-                        target_os = "macos",
-                        target_os = "ios",
-                        target_os = "tvos",
-                        target_os = "visionos",
-                        target_os = "watchos",
-                        target_os = "cygwin",
-                    ))] {
-                        const RTLD_NOLOAD: c_int = 0x10;
-                    } else if #[cfg(any(
-                        target_os = "freebsd",
-                        target_os = "dragonfly",
-                        target_os = "netbsd",
-                    ))] {
-                        const RTLD_NOLOAD: c_int = 0x2000;
-                    } else {
-                        compile_error!(
-                            "Target has no known `RTLD_NOLOAD` value. Please submit an issue or PR adding it."
-                        );
+struct OsslLibraries(Vec<Library>);
+
+impl OsslLibraries {
+    #[cfg(windows)]
+    fn from(filename: &OsStr) -> Result<Self, Error> {
+        use std::{ffi::OsString, fs, os::windows::ffi::OsStringExt, path::Path};
+
+        use pelite::pe::{Pe, PeFile};
+        use windows_sys::Win32::{
+            Foundation::MAX_PATH,
+            System::ProcessStatus::{EnumProcessModules, GetModuleFileNameExW},
+        };
+
+        // Unlike UNIX platforms, Windows requires to load from the exact library
+        // file containing the symbol, instead of e.g. _ssl.so. So we'll need to
+        // look into _ssl.pyd import tables, find the DLL file names, and match it
+        // with the currently-loaded DLLs for full paths of libcrypto and libssl.
+
+        let mut linked_dlls = Vec::new();
+        let file_data = fs::read(filename)?;
+        let pe = PeFile::from_bytes(&file_data)?;
+        if let Ok(imports) = pe.imports() {
+            for desc in imports {
+                if let Ok(dll_name) = desc.dll_name()
+                    && let Ok(dll_name) = dll_name.to_str()
+                {
+                    let lower_name = dll_name.to_lowercase();
+                    if lower_name.contains("ssl") || lower_name.contains("crypto") {
+                        linked_dlls.push(OsString::from(lower_name));
                     }
                 }
-                unsafe {
-                    libloading::os::unix::Library::open(
-                        Some(filename),
-                        RTLD_NOLOAD | libloading::os::unix::RTLD_LAZY,
-                    )?
+            }
+        }
+
+        let mut libs = Vec::new();
+        let process = unsafe { windows_sys::Win32::System::Threading::GetCurrentProcess() };
+        let mut h_mods = vec![0isize; 1024];
+        let mut cb_needed = 0u32;
+        if unsafe {
+            EnumProcessModules(
+                process,
+                h_mods.as_mut_ptr() as *mut _,
+                (h_mods.len() * size_of::<isize>()) as u32,
+                &mut cb_needed,
+            )
+        } != 0
+        {
+            let count = (cb_needed as usize) / size_of::<isize>();
+            for i in 0..count {
+                let mut sz_mod_name = vec![0u16; MAX_PATH as usize];
+                if unsafe {
+                    GetModuleFileNameExW(
+                        process,
+                        h_mods[i] as *mut _,
+                        sz_mod_name.as_mut_ptr(),
+                        MAX_PATH,
+                    )
+                } > 0
+                {
+                    let len = sz_mod_name
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(sz_mod_name.len());
+                    let path = OsString::from_wide(&sz_mod_name[..len]);
+                    if let Some(name) = Path::new(&path).file_name()
+                        && linked_dlls.iter().any(|n| n == name)
+                    {
+                        let lib = libloading::os::windows::Library::open_already_loaded(path)?;
+                        libs.push(lib.into());
+                    }
                 }
             }
-        };
+        }
+        Ok(Self(libs))
+    }
+
+    #[cfg(unix)]
+    fn from(filename: &OsStr) -> Result<Self, Error> {
+        cfg_if::cfg_if! {
+            if #[cfg(any(
+                target_os = "linux",
+                target_os = "android",
+                target_os = "emscripten",
+                target_os = "solaris",
+                target_os = "illumos",
+                target_os = "fuchsia",
+                target_os = "hurd",
+            ))] {
+                const RTLD_NOLOAD: c_int = 0x4;
+            } else if #[cfg(any(
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "tvos",
+                target_os = "visionos",
+                target_os = "watchos",
+                target_os = "cygwin",
+            ))] {
+                const RTLD_NOLOAD: c_int = 0x10;
+            } else if #[cfg(any(
+                target_os = "freebsd",
+                target_os = "dragonfly",
+                target_os = "netbsd",
+            ))] {
+                const RTLD_NOLOAD: c_int = 0x2000;
+            } else {
+                compile_error!(
+                    "Target has no known `RTLD_NOLOAD` value. Please submit an issue or PR adding it."
+                );
+            }
+        }
+        unsafe {
+            let lib = libloading::os::unix::Library::open(
+                Some(filename),
+                RTLD_NOLOAD | libloading::os::unix::RTLD_LAZY,
+            )?;
+            Ok(Self(vec![lib.into()]))
+        }
+    }
+
+    pub unsafe fn get<T>(&self, symbol: &[u8]) -> Result<Symbol<'_, T>, Error> {
+        let mut res = Err(Error::LibraryNotFound);
+        for lib in self.0.iter() {
+            match unsafe { lib.get::<T>(symbol) } {
+                Ok(sym) => return Ok(sym),
+                Err(e) => res = Err(e.into()),
+            }
+        }
+        res
+    }
+}
+
+impl OpenSSL {
+    fn load(filename: &OsStr) -> Result<Self, Error> {
+        let lib = OsslLibraries::from(filename)?;
 
         let mut rv = Self {
             BIO_meth_new: *unsafe { lib.get(b"BIO_meth_new")? },
@@ -218,7 +321,7 @@ impl OpenSSL {
                 lib.get::<unsafe extern "C" fn() -> c_ulong>(b"OpenSSL_version_num")?()
             },
 
-            lib: lib.into(),
+            lib,
         };
         if rv.version_num < 0x10100010 {
             return Err(Error::VersionTooOld);
@@ -237,7 +340,7 @@ pub fn is_loaded() -> bool {
     OPENSSL.get().is_some()
 }
 
-pub fn load(filename: impl AsFilename) -> Result<(), Error> {
+pub fn load(filename: &OsStr) -> Result<(), Error> {
     if is_loaded() {
         return Err(Error::AlreadyLoaded);
     }

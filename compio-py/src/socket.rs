@@ -213,6 +213,7 @@ impl PySocket {
                     Either::Left(ctx) => {
                         // This case is guaranteed to be a default client-side SSLContext
                         debug_assert!(!server_side);
+                        metadata.implementation = SSLImpl::Rustls;
                         let ca_certs: Bound<PyList> =
                             ctx.call_method1("get_ca_certs", (true,))?.cast_into()?;
                         let mut root_store = rustls::RootCertStore::empty();

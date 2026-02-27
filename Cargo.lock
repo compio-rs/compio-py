@@ -126,7 +126,7 @@ dependencies = [
 [[package]]
 name = "compio"
 version = "0.18.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -140,7 +140,7 @@ dependencies = [
 [[package]]
 name = "compio-buf"
 version = "0.8.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "arrayvec",
  "bytes",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "compio-driver"
 version = "0.11.1"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -178,7 +178,7 @@ dependencies = [
 [[package]]
 name = "compio-io"
 version = "0.9.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "compio-buf",
  "futures-util",
@@ -189,7 +189,7 @@ dependencies = [
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "tracing",
 ]
@@ -197,7 +197,7 @@ dependencies = [
 [[package]]
 name = "compio-net"
 version = "0.11.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -208,6 +208,7 @@ dependencies = [
  "libc",
  "once_cell",
  "socket2",
+ "synchrony",
  "widestring",
  "windows-sys 0.61.2",
 ]
@@ -231,17 +232,20 @@ dependencies = [
 
 [[package]]
 name = "compio-py-dynamic-openssl"
-version = "0.3.0"
+version = "0.5.0"
 dependencies = [
  "cfg-if",
+ "compio-log",
  "libloading",
+ "pelite",
  "pyo3",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "compio-quic"
 version = "0.7.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "cfg_aliases",
  "compio-buf",
@@ -263,7 +267,7 @@ dependencies = [
 [[package]]
 name = "compio-runtime"
 version = "0.11.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "async-task",
  "cfg-if",
@@ -286,7 +290,7 @@ dependencies = [
 [[package]]
 name = "compio-tls"
 version = "0.9.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "compio-buf",
  "compio-io",
@@ -299,7 +303,7 @@ dependencies = [
 [[package]]
 name = "compio-ws"
 version = "0.3.0"
-source = "git+https://github.com/fantix/compio.git?rev=57ab32085919ecde0a20def23074e4a19dd978ff#57ab32085919ecde0a20def23074e4a19dd978ff"
+source = "git+https://github.com/compio-rs/compio.git?rev=92127da50b383be53f7a5364ee818bf3952ac17f#92127da50b383be53f7a5364ee818bf3952ac17f"
 dependencies = [
  "compio-buf",
  "compio-io",
@@ -376,6 +380,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
+name = "dataview"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daba87f72c730b508641c9fb6411fc9bba73939eed2cab611c399500511880d0"
+dependencies = [
+ "derive_pod",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -384,6 +397,12 @@ dependencies = [
  "const-oid",
  "zeroize",
 ]
+
+[[package]]
+name = "derive_pod"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2ea6706d74fca54e15f1d40b5cf7fe7f764aaec61352a9fcec58fe27e042fc8"
 
 [[package]]
 name = "digest"
@@ -409,7 +428,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -694,12 +713,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "no-std-compat"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b93853da6d84c2e3c7d730d6473e8817692dd89be387eb01b94d7f108ecb5b8c"
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -733,6 +758,25 @@ dependencies = [
  "digest",
  "hmac",
 ]
+
+[[package]]
+name = "pelite"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88dccf4bd32294364aeb7bd55d749604450e9db54605887551f21baea7617685"
+dependencies = [
+ "dataview",
+ "libc",
+ "no-std-compat",
+ "pelite-macros",
+ "winapi",
+]
+
+[[package]]
+name = "pelite-macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a7cf3f8ecebb0f4895f4892a8be0a0dc81b498f9d56735cb769dc31bf00815b"
 
 [[package]]
 name = "pem"
@@ -991,7 +1035,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1185,9 +1229,9 @@ dependencies = [
 
 [[package]]
 name = "synchrony"
-version = "0.1.1"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de0208d3660701622272151bc63c35f5d32ca3d45c19785a9a8dc04dc797dc43"
+checksum = "86246561e65786098f4dbe4d95bd7550ec541ff83921ab878e3b51c615735673"
 dependencies = [
  "event-listener",
  "futures-util",

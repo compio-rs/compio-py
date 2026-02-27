@@ -2,26 +2,30 @@
 // Copyright 2026 Fantix King
 
 use std::{
+    ffi::OsStr,
     io::{Read, Write},
     net::IpAddr,
 };
 
-pub use self::loader::{Error, get, is_loaded, load};
-use self::{
-    ssl::{HandshakeError, Ssl, SslStream},
-    sys as ffi,
-};
+use compio_log::debug;
+pub use pyo3;
 use pyo3::{
     ffi::{PyObject, c_str},
     prelude::*,
     types::PyDict,
 };
 
-mod bio;
+use self::{
+    loader::get,
+    ssl::{HandshakeError, Ssl, SslStream},
+    sys as ffi,
+};
+
+pub mod bio;
 pub mod error;
-mod loader;
+pub mod loader;
 pub mod ssl;
-mod sys;
+pub mod sys;
 
 pub struct SSLContext {
     ptr: *mut ffi::SSL_CTX,
@@ -104,7 +108,7 @@ impl Clone for SSLContext {
 }
 
 pub fn load_py(py: Python) -> PyResult<bool> {
-    if is_loaded() {
+    if loader::is_loaded() {
         return Ok(true);
     }
 
@@ -124,9 +128,29 @@ except TypeError:
         .get_item("lib")?
         .expect("defined lib")
         .extract::<String>()?;
-    match load(lib) {
+    match py.detach(|| loader::load(OsStr::new(&lib))) {
         Ok(()) => Ok(true),
-        Err(Error::AlreadyLoaded) => Ok(true),
-        _ => Ok(false),
+        Err(loader::Error::AlreadyLoaded) => Ok(true),
+        Err(loader::Error::LibraryNotFound) => {
+            debug!("Failed to load OpenSSL: library not found");
+            Ok(false)
+        }
+        Err(loader::Error::IoError(_e)) => {
+            debug!("Failed to load OpenSSL: {_e}");
+            Ok(false)
+        }
+        Err(loader::Error::VersionTooOld) => {
+            debug!("Failed to load OpenSSL: version is too old");
+            Ok(false)
+        }
+        Err(loader::Error::Loader(_e)) => {
+            debug!("Failed to load OpenSSL: {_e}");
+            Ok(false)
+        }
+        #[cfg(windows)]
+        Err(loader::Error::PE(_e)) => {
+            debug!("Failed to load OpenSSL: {_e}");
+            Ok(false)
+        }
     }
 }
