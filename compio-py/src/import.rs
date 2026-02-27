@@ -219,6 +219,20 @@ module!(socket {
     }
 });
 
+module!(ssl {
+    pub fn tls_version(py: Python, version: u16) -> PyResult<Bound<PyAny>> {
+        getattr!(py, ssl, "TLSVersion").call1((version,))
+    }
+
+    pub fn is_ssl_context(py: Python<'_>, obj: &Bound<PyAny>) -> PyResult<bool> {
+        obj.is_instance(getattr!(py, ssl, "SSLContext"))
+    }
+
+    pub fn create_default_context(py: Python) -> PyResult<Bound<PyAny>> {
+        getattr!(py, ssl, "create_default_context").call0()
+    }
+});
+
 module!(weakref {
     pub fn weak_key_dict(py: Python) -> PyResult<Bound<PyAny>> {
         getattr!(py, weakref, "WeakKeyDictionary").call0()

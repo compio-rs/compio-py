@@ -22,9 +22,16 @@ dev = [
 module-name = "compio._core"
 python-packages = ["compio"]
 python-source = "src"
+manifest-path = "compio-py/Cargo.toml"
 
 [tool.uv]
-cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.rs" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "compio-py/**/*.rs" },
+    { file = "compio-py-dynamic-openssl/**/*.rs" },
+    { file = "**/Cargo.toml" },
+    { file = "Cargo.lock" }
+]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

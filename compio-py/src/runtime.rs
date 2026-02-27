@@ -433,6 +433,7 @@ pub fn fatal_error(err: PyErr) {
 // https://github.com/compio-rs/compio/blob/88846e5e81e5833d53c72b605a90a432a7445de9/compio-runtime/src/attacher.rs
 // Copyright (c) 2023 Berrysoft
 
+#[derive(Debug)]
 pub struct Attacher<S> {
     source: SharedFd<S>,
 }
