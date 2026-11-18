@@ -19,6 +19,9 @@ use pyo3::{
     types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
 };
 
+use cyper_hickory::{CompioConnectionProvider, CompioRuntimeProvider};
+use hickory_resolver::Resolver;
+
 use crate::{
     handle::{Handle, TimerHandle},
     import, net,
@@ -28,8 +31,13 @@ use crate::{
 
 static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
 
+/* common socket flags as defined in libc */
+const AF_INET: i32 = 2;
+const AF_INET6: i32 = 10;
+
 #[pyclass(subclass)]
 pub struct CompioLoop {
+    dns: OwnedRefCell<Resolver<CompioRuntimeProvider>>,
     runtime: OwnedRefCell<Runtime>,
     stopping: Arc<AtomicBool>,
     debug: Arc<AtomicBool>,
@@ -40,7 +48,9 @@ pub struct CompioLoop {
 impl CompioLoop {
     #[new]
     fn new(py: Python) -> PyResult<Self> {
+       
         Ok(Self {
+            dns:Default::default(),
             runtime: Default::default(),
             stopping: Default::default(),
             debug: Default::default(),
@@ -56,11 +66,19 @@ impl CompioLoop {
         py.detach(|| {
             Runtime::new(pyloop, stopping).map(|runtime| {
                 Python::attach(|py| {
-                    slf.bind(py)
-                        .borrow_mut()
-                        .runtime
+                    let m = slf.bind(py).borrow_mut();
+                    m.runtime
                         .init(runtime)
                         .expect("uninitialized");
+                    m.dns
+                        .init(
+                            Resolver::builder(
+                                CompioRuntimeProvider::new_current()
+                            )
+                        .expect("unable to make resolver builder")
+                        .build()
+                        .expect("unable to build resolver")
+                        ).expect("unitialized");
                 })
             })
         })?;
@@ -176,6 +194,18 @@ impl CompioLoop {
 
     // Network I/O methods returning Futures.
 
+    // #[pyo3(signature =(host, port, *, family=0, r#type=0, proto=0, flags=0))]
+    // fn getaddrinfo<'py>(
+    //     &self,
+    //     py: Python<'py>,
+    //     host: String,
+    //     port: u16,
+    //     family: i32,
+    //     r#type: i32,
+    //     proto: i32,
+    //     flags: i32
+    // ) -> PyResult<Bound<'py, PyAny>> {
+
     #[pyo3(signature = (*args, **kwargs))]
     fn getaddrinfo<'py>(
         &self,
@@ -274,6 +304,17 @@ impl CompioLoop {
     #[inline]
     pub fn runtime(&self) -> PyResult<owned::Ref<'_, Runtime>> {
         match self.runtime.get() {
+            Ok(Some(rv)) => Ok(rv),
+            Ok(None) => Err(PyErr::new::<PyRuntimeError, _>("CompioLoop is closed")),
+            Err(_) => Err(PyErr::new::<PyRuntimeError, _>(
+                "Non-thread-safe operation invoked on an event loop other than the current one",
+            )),
+        }
+    }
+
+    #[inline]
+    pub fn dns(&self) -> PyResult<owned::Ref<'_, Resolver<CompioRuntimeProvider>>> {
+        match self.dns.get() {
             Ok(Some(rv)) => Ok(rv),
             Ok(None) => Err(PyErr::new::<PyRuntimeError, _>("CompioLoop is closed")),
             Err(_) => Err(PyErr::new::<PyRuntimeError, _>(
