@@ -11,15 +11,15 @@ use compio_executor::JoinHandle;
 use compio_log::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
-    IntoPyObjectExt,
-    buffer::PyBuffer,
-    exceptions::{PyRuntimeError, PyValueError},
-    ffi::c_str,
-    prelude::*,
-    types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
+    IntoPyObjectExt, buffer::PyBuffer, exceptions::{PyOSError, PyRuntimeError, PyValueError}, ffi::{_PyCFunctionFast, c_str}, prelude::*, types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
 };
 
+use c_types::{AF_INET, AF_INET6};
+use cyper_hickory::CompioRuntimeProvider;
+use hickory_resolver::Resolver;
+
 use crate::{
+    dns::{AddrInfo, AddrInfoBuilder, parse_getaddrinfo},
     handle::{Handle, TimerHandle},
     import, net,
     owned::{self, OwnedRefCell},
@@ -28,8 +28,10 @@ use crate::{
 
 static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
 
+
 #[pyclass(subclass)]
 pub struct CompioLoop {
+    dns: OwnedRefCell<Resolver<CompioRuntimeProvider>>,
     runtime: OwnedRefCell<Runtime>,
     stopping: Arc<AtomicBool>,
     debug: Arc<AtomicBool>,
@@ -41,6 +43,7 @@ impl CompioLoop {
     #[new]
     fn new(py: Python) -> PyResult<Self> {
         Ok(Self {
+            dns:Default::default(),
             runtime: Default::default(),
             stopping: Default::default(),
             debug: Default::default(),
@@ -56,11 +59,19 @@ impl CompioLoop {
         py.detach(|| {
             Runtime::new(pyloop, stopping).map(|runtime| {
                 Python::attach(|py| {
-                    slf.bind(py)
-                        .borrow_mut()
-                        .runtime
+                    let m = slf.bind(py).borrow_mut();
+                    m.runtime
                         .init(runtime)
                         .expect("uninitialized");
+                    m.dns
+                        .init(
+                            Resolver::builder(
+                                CompioRuntimeProvider::new_current()
+                            )
+                        .expect("unable to make resolver builder")
+                        .build()
+                        .expect("unable to build resolver")
+                        ).expect("unitialized");
                 })
             })
         })?;
@@ -176,18 +187,73 @@ impl CompioLoop {
 
     // Network I/O methods returning Futures.
 
-    #[pyo3(signature = (*args, **kwargs))]
+    #[pyo3(signature =(host, port, *, family=0, r#type=0, proto=0, flags=0))]
     fn getaddrinfo<'py>(
-        &self,
+        slf: &Bound<Self>,
         py: Python<'py>,
-        args: Py<PyTuple>,
-        kwargs: Option<Py<PyDict>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let f = || {
-            Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs).map(|r| r.unbind()))
-        };
-        self.spawn_py(py, runtime::asyncify(f))
+        host: String,
+        port: u16,
+        family: u16,
+        r#type: u32,
+        proto: u32,
+        flags: u32
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let this = slf.clone().unbind();
+        let hints = AddrInfoBuilder::default()
+            .set_domain(&host, port)
+            .set_family(family)
+            .set_socktype(r#type)
+            .set_proto(proto)
+            .set_flags(flags)
+            .build();
+        
+        // We still need to figure this out because the borrowchecker freaks out.
+        // slf.borrow().spawn_py(
+        //     py,
+        //     async move {
+        //         let dns = this.bind(py).borrow().dns()?;
+
+        //         let host = hints.host();
+        //         let family = hints.family;
+        //         let mut results = Vec::new();
+        //         if (family & AF_INET) > 0 || family == 0 {
+        //             let ipv4 = dns.ipv4_lookup(&host).await;
+        //             match ipv4 {
+        //                 Ok(ipv4_result) => {results.push(ipv4_result)},
+        //                 Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
+        //             }
+        //         }
+        //         if (family & AF_INET6) > 0 || family == 0 {
+        //             let ipv6 = dns.ipv6_lookup(&host).await;
+        //             match ipv6 {
+        //                 Ok(ipv6_result) => {results.push(ipv6_result)},
+        //                 Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
+        //             }
+        //         }
+        //         let info = parse_getaddrinfo(&hints, &results);
+        //         Python::attach(|py| 
+        //             { 
+        //                 let b = info.clone().into_pyobject(py)?.unbind();
+        //                 Ok(b)
+        //             }
+        //         )
+        // })
+        todo!()
+
     }
+
+    // #[pyo3(signature = (*args, **kwargs))]
+    // fn getaddrinfo<'py>(
+    //     &self,
+    //     py: Python<'py>,
+    //     args: Py<PyTuple>,
+    //     kwargs: Option<Py<PyDict>>,
+    // ) -> PyResult<Bound<'py, PyAny>> {
+    //     let f = || {
+    //         Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs).map(|r| r.unbind()))
+    //     };
+    //     self.spawn_py(py, runtime::asyncify(f))
+    // }
 
     #[pyo3(signature = (*args, **kwargs))]
     fn getnameinfo<'py>(
@@ -274,6 +340,17 @@ impl CompioLoop {
     #[inline]
     pub fn runtime(&self) -> PyResult<owned::Ref<'_, Runtime>> {
         match self.runtime.get() {
+            Ok(Some(rv)) => Ok(rv),
+            Ok(None) => Err(PyErr::new::<PyRuntimeError, _>("CompioLoop is closed")),
+            Err(_) => Err(PyErr::new::<PyRuntimeError, _>(
+                "Non-thread-safe operation invoked on an event loop other than the current one",
+            )),
+        }
+    }
+
+    #[inline]
+    pub fn dns(&self) -> PyResult<owned::Ref<'_, Resolver<CompioRuntimeProvider>>> {
+        match self.dns.get() {
             Ok(Some(rv)) => Ok(rv),
             Ok(None) => Err(PyErr::new::<PyRuntimeError, _>("CompioLoop is closed")),
             Err(_) => Err(PyErr::new::<PyRuntimeError, _>(

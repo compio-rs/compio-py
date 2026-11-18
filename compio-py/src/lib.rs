@@ -6,6 +6,7 @@ use std::io;
 use compio::{buf::IoBuf, tls::rustls};
 use pyo3::{buffer::PyBuffer, prelude::*};
 
+mod dns;
 mod event_loop;
 mod handle;
 mod import;

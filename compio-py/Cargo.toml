@@ -28,3 +28,10 @@ pkcs8 = { version = "0.10.2", features = ["encryption"] }
 compio = { workspace = true, features = ["io-uring", "polling", "io", "py-dynamic-openssl", "rustls", "ring"] }
 compio-executor = { workspace = true }
 compio-log = { workspace = true }
+hickory-resolver = "0.26.3"
+cyper-hickory = "0.1.0"
+libc = "0.2.191"
+c-types = "6.0.0"
+# Might need help with setting up an OS check - Vizonex.
+windows-sys = "0.61.2"
+hickory-proto = "0.26.3"
