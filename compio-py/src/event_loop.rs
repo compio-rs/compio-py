@@ -11,13 +11,15 @@ use compio_executor::JoinHandle;
 use compio_log::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
-    IntoPyObjectExt, buffer::PyBuffer, exceptions::{PyOSError, PyRuntimeError, PyValueError}, ffi::c_str, prelude::*, types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
+    IntoPyObjectExt, buffer::PyBuffer, exceptions::{PyOSError, PyRuntimeError, PyValueError}, ffi::{_PyCFunctionFast, c_str}, prelude::*, types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
 };
 
-use cyper_hickory::{CompioConnectionProvider, CompioRuntimeProvider};
-use hickory_resolver::{Resolver, lookup::Lookup};
+use c_types::{AF_INET, AF_INET6};
+use cyper_hickory::CompioRuntimeProvider;
+use hickory_resolver::Resolver;
 
 use crate::{
+    dns::{AddrInfo, AddrInfoBuilder, parse_getaddrinfo},
     handle::{Handle, TimerHandle},
     import, net,
     owned::{self, OwnedRefCell},
@@ -26,36 +28,6 @@ use crate::{
 
 static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
 
-/* common socket flags as defined in libc */
-const AF_INET: i32 = 2;
-const AF_INET6: i32 = 10;
-
-
-async fn async_getaddrinfo<'py>(
-    r#loop: &CompioLoop,
-    host: String,
-    family: i32,
-) -> PyResult<Vec<Lookup>> {
-    let dns = r#loop.dns()?;
-    let mut results = Vec::new();
-
-    if (family & AF_INET) > 0 || family == 0 {
-        let ipv4 = dns.ipv4_lookup(&host).await;
-        match ipv4 {
-            Ok(ipv4_result) => {results.push(ipv4_result)},
-            Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
-        }
-    }
-
-    if (family & AF_INET6) > 0 || family == 0 {
-        let ipv6 = dns.ipv6_lookup(&host).await;
-        match ipv6 {
-            Ok(ipv6_result) => {results.push(ipv6_result)},
-            Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
-        }
-    }
-    Ok(results)
-}
 
 #[pyclass(subclass)]
 pub struct CompioLoop {
@@ -217,18 +189,57 @@ impl CompioLoop {
 
     #[pyo3(signature =(host, port, *, family=0, r#type=0, proto=0, flags=0))]
     fn getaddrinfo<'py>(
-        &self,
+        slf: &Bound<Self>,
         py: Python<'py>,
         host: String,
         port: u16,
-        family: i32,
-        r#type: i32,
-        proto: i32,
-        flags: i32
-    ) -> PyResult<Bound<'py, PyAny>> {
+        family: u16,
+        r#type: u32,
+        proto: u32,
+        flags: u32
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let this = slf.clone().unbind();
+        let hints = AddrInfoBuilder::default()
+            .set_domain(&host, port)
+            .set_family(family)
+            .set_socktype(r#type)
+            .set_proto(proto)
+            .set_flags(flags)
+            .build();
         
+        // We still need to figure this out because the borrowchecker freaks out.
+        // slf.borrow().spawn_py(
+        //     py,
+        //     async move {
+        //         let dns = this.bind(py).borrow().dns()?;
 
+        //         let host = hints.host();
+        //         let family = hints.family;
+        //         let mut results = Vec::new();
+        //         if (family & AF_INET) > 0 || family == 0 {
+        //             let ipv4 = dns.ipv4_lookup(&host).await;
+        //             match ipv4 {
+        //                 Ok(ipv4_result) => {results.push(ipv4_result)},
+        //                 Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
+        //             }
+        //         }
+        //         if (family & AF_INET6) > 0 || family == 0 {
+        //             let ipv6 = dns.ipv6_lookup(&host).await;
+        //             match ipv6 {
+        //                 Ok(ipv6_result) => {results.push(ipv6_result)},
+        //                 Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
+        //             }
+        //         }
+        //         let info = parse_getaddrinfo(&hints, &results);
+        //         Python::attach(|py| 
+        //             { 
+        //                 let b = info.clone().into_pyobject(py)?.unbind();
+        //                 Ok(b)
+        //             }
+        //         )
+        // })
         todo!()
+
     }
 
     // #[pyo3(signature = (*args, **kwargs))]
