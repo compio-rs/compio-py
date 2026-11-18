@@ -11,16 +11,11 @@ use compio_executor::JoinHandle;
 use compio_log::*;
 use once_cell::sync::OnceCell;
 use pyo3::{
-    IntoPyObjectExt,
-    buffer::PyBuffer,
-    exceptions::{PyRuntimeError, PyValueError},
-    ffi::c_str,
-    prelude::*,
-    types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
+    IntoPyObjectExt, buffer::PyBuffer, exceptions::{PyOSError, PyRuntimeError, PyValueError}, ffi::c_str, prelude::*, types::{PyDict, PyMapping, PyTuple, PyWeakrefReference},
 };
 
 use cyper_hickory::{CompioConnectionProvider, CompioRuntimeProvider};
-use hickory_resolver::Resolver;
+use hickory_resolver::{Resolver, lookup::Lookup};
 
 use crate::{
     handle::{Handle, TimerHandle},
@@ -35,6 +30,33 @@ static COMPIO_FUTURE: OnceCell<Py<PyAny>> = OnceCell::new();
 const AF_INET: i32 = 2;
 const AF_INET6: i32 = 10;
 
+
+async fn async_getaddrinfo<'py>(
+    r#loop: &CompioLoop,
+    host: String,
+    family: i32,
+) -> PyResult<Vec<Lookup>> {
+    let dns = r#loop.dns()?;
+    let mut results = Vec::new();
+
+    if (family & AF_INET) > 0 || family == 0 {
+        let ipv4 = dns.ipv4_lookup(&host).await;
+        match ipv4 {
+            Ok(ipv4_result) => {results.push(ipv4_result)},
+            Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
+        }
+    }
+
+    if (family & AF_INET6) > 0 || family == 0 {
+        let ipv6 = dns.ipv6_lookup(&host).await;
+        match ipv6 {
+            Ok(ipv6_result) => {results.push(ipv6_result)},
+            Err(e) => {return Err(PyOSError::new_err(e.to_string()));}
+        }
+    }
+    Ok(results)
+}
+
 #[pyclass(subclass)]
 pub struct CompioLoop {
     dns: OwnedRefCell<Resolver<CompioRuntimeProvider>>,
@@ -48,7 +70,6 @@ pub struct CompioLoop {
 impl CompioLoop {
     #[new]
     fn new(py: Python) -> PyResult<Self> {
-       
         Ok(Self {
             dns:Default::default(),
             runtime: Default::default(),
@@ -194,30 +215,34 @@ impl CompioLoop {
 
     // Network I/O methods returning Futures.
 
-    // #[pyo3(signature =(host, port, *, family=0, r#type=0, proto=0, flags=0))]
-    // fn getaddrinfo<'py>(
-    //     &self,
-    //     py: Python<'py>,
-    //     host: String,
-    //     port: u16,
-    //     family: i32,
-    //     r#type: i32,
-    //     proto: i32,
-    //     flags: i32
-    // ) -> PyResult<Bound<'py, PyAny>> {
-
-    #[pyo3(signature = (*args, **kwargs))]
+    #[pyo3(signature =(host, port, *, family=0, r#type=0, proto=0, flags=0))]
     fn getaddrinfo<'py>(
         &self,
         py: Python<'py>,
-        args: Py<PyTuple>,
-        kwargs: Option<Py<PyDict>>,
+        host: String,
+        port: u16,
+        family: i32,
+        r#type: i32,
+        proto: i32,
+        flags: i32
     ) -> PyResult<Bound<'py, PyAny>> {
-        let f = || {
-            Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs).map(|r| r.unbind()))
-        };
-        self.spawn_py(py, runtime::asyncify(f))
+        
+
+        todo!()
     }
+
+    // #[pyo3(signature = (*args, **kwargs))]
+    // fn getaddrinfo<'py>(
+    //     &self,
+    //     py: Python<'py>,
+    //     args: Py<PyTuple>,
+    //     kwargs: Option<Py<PyDict>>,
+    // ) -> PyResult<Bound<'py, PyAny>> {
+    //     let f = || {
+    //         Python::attach(|py| import::socket::getaddrinfo(py, args, kwargs).map(|r| r.unbind()))
+    //     };
+    //     self.spawn_py(py, runtime::asyncify(f))
+    // }
 
     #[pyo3(signature = (*args, **kwargs))]
     fn getnameinfo<'py>(
